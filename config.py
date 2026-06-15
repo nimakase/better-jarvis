@@ -45,4 +45,12 @@ MAX_HISTORY_TURNS = 20        # 超过此轮数触发摘要压缩
 MAX_TOKENS_RESPONSE = 4096
 CONTEXT_WINDOW_SOFT_LIMIT = 800_000  # token 软上限，超过则压缩历史（V4 Flash 支持 1M context）
 
-# ── 动作安全分级 ──────────────────�
+
+# ── Web / 文件目录 ────────────────────────────────────
+import tempfile
+
+FRONTEND_DIR = BASE_DIR / "frontend"
+UPLOAD_DIR   = Path(tempfile.gettempdir()) / "jarvis_uploads"
+DOWNLOAD_DIR = Path(tempfile.gettempdir()) / "jarvis_downloads"
+UPLOAD_DIR.mkdir(exist_ok=True)
+DOWNLOAD_DIR.mkdir(exist_ok=True)

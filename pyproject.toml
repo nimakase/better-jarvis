@@ -49,7 +49,7 @@ all = [
 jarvis = "main:main"
 
 # ── 扁平布局打包说明 ──────────────────────────────────────────────
-# 当前保持仓库根目录的扁平结构（顶层模块 + core/connectors 子包）。
+# 当前保持仓库根目录的扁平结构（顶层模块 + core/connectors/web 子包）。
 # 推荐用 `pip install -e .` 做开发安装：文件留在原地，
 # main.py 的 Path(__file__).parent 仍指向仓库根，frontend/ 等资源照常可用。
 # （后续步骤再考虑收进 jarvis/ 命名空间包并把 frontend 作为 package-data 分发。）
@@ -57,5 +57,5 @@ jarvis = "main:main"
 py-modules = ["main", "config"]
 
 [tool.setuptools.packages.find]
-include = ["core*", "connectors*"]
+include = ["core*", "connectors*", "web*"]
 exclude = ["skills*", "schedules*", "data*", "frontend*", "better jarvis*"]

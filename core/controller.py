@@ -345,7 +345,3 @@ class JarvisController:
                 })
 
             # 继续循环，让模型消化工具结果
-
-
-# 单例
-controller = JarvisController()
