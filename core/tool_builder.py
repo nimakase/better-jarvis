@@ -29,42 +29,11 @@ import config
 from core.controller import register_tool
 from core.safety import safe_name, is_safe_name
 from core.results import ToolResult, Action
+from core.skill_policy import ALLOWED_IMPORTS, BLOCKED_IMPORTS, WARNING_PATTERNS, import_rules_text
 
 # ── 静态代码验证 ──────────────────────────────────────────────────────────────
 
-# 允许导入的模块白名单（标准库安全子集 + 已安装第三方包）
-ALLOWED_IMPORTS = {
-    "json", "datetime", "pathlib", "typing", "math", "random", "time",
-    "hashlib", "base64", "csv", "io", "copy", "re", "collections",
-    "itertools", "functools", "dataclasses", "enum", "abc", "string",
-    "urllib.parse", "html", "decimal", "fractions", "statistics",
-    "httpx", "openai", "requests",
-    "pdfplumber", "docx", "openpyxl", "pptx",
-}
-
-# 禁止导入（阻断级别）
-BLOCKED_IMPORTS = {
-    "core", "connectors", "main", "config",   # 内部模块
-    "subprocess", "multiprocessing", "signal", # 进程/系统控制
-    "socket", "ssl", "asynchat", "asyncore",   # 低级网络
-    "ctypes", "cffi", "mmap",                   # 原生代码
-    "importlib", "pkgutil",                     # 动态导入
-    "pickle", "shelve", "marshal",              # 不安全序列化
-    "pty", "tty", "termios", "fcntl",           # 终端控制
-}
-
-# 可疑模式（警告级别，不阻断）
-WARNING_PATTERNS = [
-    ("os.system",    "可执行系统命令"),
-    ("os.popen",     "可执行系统命令"),
-    ("os.remove",    "可删除文件"),
-    ("os.rmdir",     "可删除目录"),
-    ("shutil.rmtree","可递归删除目录"),
-    ("sys.path",     "可修改模块搜索路径"),
-    ("sys.modules",  "可修改已加载模块"),
-    ("__import__",   "动态导入，可绕过白名单"),
-    ("open(",        "直接读写文件系统"),
-]
+# 导入白名单 / 黑名单 / 可疑模式均来自 core.skill_policy（与提示词同源，见文件顶部 import）
 
 
 def validate_tool_code(code: str) -> dict:
@@ -152,8 +121,7 @@ CODE_GEN_PROMPT = '''你是一个 Python 工具开发助手。根据用户需求
 
 【严格遵守的格式要求】
 1. 文件顶部是注释（描述工具用途）
-2. 只 import 标准库或以下已安装的库：httpx, openai, pdfplumber, python-docx, openpyxl, python-pptx, requests, pathlib, json, datetime, re, csv, os, sys
-3. 禁止 import：core, connectors, main, config（内部模块），subprocess, multiprocessing, importlib, pickle, ctypes
+__IMPORT_RULES__
 4. 有且只有一个主 async 函数，函数名 = 工具名（snake_case）
 5. 文件末尾必须有 TOOL_DEF 字典，格式如下：
    TOOL_DEF = {
@@ -214,6 +182,9 @@ TOOL_DEF = {
     }
 }
 '''
+
+# 用单一事实来源（skill_policy）渲染导入规则，替换占位符，保证与校验器永不漂移
+CODE_GEN_PROMPT = CODE_GEN_PROMPT.replace("__IMPORT_RULES__", import_rules_text())
 
 
 async def _generate_code(tool_name: str, user_request: str) -> str:
