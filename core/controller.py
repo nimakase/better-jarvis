@@ -14,6 +14,9 @@ from openai import AsyncOpenAI
 
 import config
 from core import memory as mem
+from core import registry
+# 向后兼容：连接器/技能仍可 `from core.controller import register_tool`
+from core.registry import register_tool
 
 # ── System Prompt ─────────────────────────────────────────────────────────────
 
@@ -71,18 +74,8 @@ def _build_system_prompt() -> str:
 
 
 # ── 工具注册表 ────────────────────────────────────────────────────────────────
-
-_tool_registry: dict[str, Callable] = {}
-_tool_definitions: list[dict] = []  # 存 input_schema 格式，发送前转换为 OpenAI 格式
-
-
-def register_tool(definition: dict, handler: Callable):
-    """注册外部工具（连接器调用）。definition 用 input_schema 格式。重复注册自动跳过。"""
-    name = definition["name"]
-    if any(d["name"] == name for d in _tool_definitions):
-        return
-    _tool_definitions.append(definition)
-    _tool_registry[name] = handler
+# 工具的事实来源已统一到 core.registry；本模块只负责格式转换与执行分发。
+# register_tool 已在文件顶部从 core.registry 再导出，保持向后兼容。
 
 
 def _to_openai_tool(defn: dict) -> dict:
@@ -220,9 +213,10 @@ async def _execute_tool(name: str, inputs: dict) -> str:
         except Exception as e:
             return f"工具执行出错：{e}"
 
-    if name in _tool_registry:
+    handler = registry.get_handler(name)
+    if handler is not None:
         try:
-            return await _safe_call(_tool_registry[name], **inputs)
+            return await _safe_call(handler, **inputs)
         except Exception as e:
             return f"工具 {name} 执行出错：{e}"
 
@@ -244,7 +238,7 @@ class JarvisController:
 
     def get_all_tools(self) -> list[dict]:
         """返回 OpenAI function calling 格式的工具列表。"""
-        all_defs = BUILTIN_TOOL_DEFS + _tool_definitions
+        all_defs = BUILTIN_TOOL_DEFS + registry.definitions()
         return [_to_openai_tool(d) for d in all_defs]
 
     async def chat(self, user_message: str) -> AsyncGenerator[str, None]:

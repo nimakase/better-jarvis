@@ -1,5 +1,5 @@
 """
-飞书连接器
+飞书连接器（已迁移为 @tool 自注册写法，作为连接器迁移样板）
 
 覆盖功能：
   - 获取日历事件列表
@@ -14,6 +14,11 @@
        calendar:calendar（日历读写）
        im:message（消息读写）
        im:message:send_as_bot（发消息）
+
+写法说明：
+  业务函数直接用 @tool(name, description, input_schema) 装饰即自注册，
+  无需 TOOL_DEFS / handler 包装 / register_*；启动时由
+  core.registry.discover_connectors() 导入本模块触发注册。
 """
 
 import httpx
@@ -23,7 +28,7 @@ from typing import Optional
 from urllib.parse import quote
 
 import config
-from core.controller import register_tool
+from core.registry import tool
 
 # ── Token 管理 ────────────────────────────────────────────────────────────────
 
@@ -64,6 +69,19 @@ async def _headers() -> dict:
 
 # ── 日历 API ──────────────────────────────────────────────────────────────────
 
+@tool(
+    "get_calendar",
+    "获取飞书日历中指定日期范围内的事件列表。询问日程、安排、空档时使用。",
+    {
+        "type": "object",
+        "properties": {
+            "start_date":  {"type": "string", "description": "开始日期，格式 YYYY-MM-DD"},
+            "end_date":    {"type": "string", "description": "结束日期，格式 YYYY-MM-DD"},
+            "calendar_id": {"type": "string", "description": "日历 ID，默认 'primary'"},
+        },
+        "required": ["start_date", "end_date"],
+    },
+)
 async def get_calendar(start_date: str, end_date: str, calendar_id: str = "primary") -> str:
     """
     获取指定日期范围内的日历事件。
@@ -105,6 +123,21 @@ async def get_calendar(start_date: str, end_date: str, calendar_id: str = "prima
         return f"日历工具出错：{e}"
 
 
+@tool(
+    "create_calendar_event",
+    "在飞书日历中创建新事件。用户要新增日程时使用。执行前须告知用户将创建的内容。",
+    {
+        "type": "object",
+        "properties": {
+            "summary":        {"type": "string", "description": "事件标题"},
+            "start_datetime": {"type": "string", "description": "开始时间，格式 YYYY-MM-DDTHH:MM:SS+08:00"},
+            "end_datetime":   {"type": "string", "description": "结束时间，格式 YYYY-MM-DDTHH:MM:SS+08:00"},
+            "description":    {"type": "string", "description": "事件描述（可选）"},
+            "calendar_id":    {"type": "string", "description": "日历 ID，默认 'primary'"},
+        },
+        "required": ["summary", "start_datetime", "end_datetime"],
+    },
+)
 async def create_calendar_event(
     summary: str,
     start_datetime: str,
@@ -141,6 +174,18 @@ async def create_calendar_event(
 
 # ── 消息 API ──────────────────────────────────────────────────────────────────
 
+@tool(
+    "get_feishu_messages",
+    "获取飞书指定会话的最近消息记录。",
+    {
+        "type": "object",
+        "properties": {
+            "chat_id": {"type": "string", "description": "飞书会话 ID"},
+            "limit":   {"type": "integer", "description": "最多获取多少条，默认 20"},
+        },
+        "required": ["chat_id"],
+    },
+)
 async def get_feishu_messages(chat_id: str, limit: int = 20) -> str:
     """获取指定会话的最近消息。"""
     try:
@@ -170,6 +215,19 @@ async def get_feishu_messages(chat_id: str, limit: int = 20) -> str:
         return f"获取消息出错：{e}"
 
 
+@tool(
+    "send_feishu_message",
+    "通过飞书发送文字消息给指定用户或群。不可逆操作，执行前必须告知用户并确认。",
+    {
+        "type": "object",
+        "properties": {
+            "receive_id":      {"type": "string", "description": "接收方 ID"},
+            "text":            {"type": "string", "description": "消息内容"},
+            "receive_id_type": {"type": "string", "description": "ID 类型：open_id / user_id / email / chat_id"},
+        },
+        "required": ["receive_id", "text"],
+    },
+)
 async def send_feishu_message(receive_id: str, text: str, receive_id_type: str = "open_id") -> str:
     """
     发送文字消息。
@@ -195,87 +253,3 @@ async def send_feishu_message(receive_id: str, text: str, receive_id_type: str =
 
     except Exception as e:
         return f"发送消息出错：{e}"
-
-
-# ── 工具定义 & 注册 ───────────────────────────────────────────────────────────
-
-FEISHU_TOOL_DEFS = [
-    {
-        "name": "get_calendar",
-        "description": "获取飞书日历中指定日期范围内的事件列表。询问日程、安排、空档时使用。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "start_date":  {"type": "string", "description": "开始日期，格式 YYYY-MM-DD"},
-                "end_date":    {"type": "string", "description": "结束日期，格式 YYYY-MM-DD"},
-                "calendar_id": {"type": "string", "description": "日历 ID，默认 'primary'"},
-            },
-            "required": ["start_date", "end_date"],
-        },
-    },
-    {
-        "name": "create_calendar_event",
-        "description": "在飞书日历中创建新事件。用户要新增日程时使用。执行前须告知用户将创建的内容。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "summary":        {"type": "string", "description": "事件标题"},
-                "start_datetime": {"type": "string", "description": "开始时间，格式 YYYY-MM-DDTHH:MM:SS+08:00"},
-                "end_datetime":   {"type": "string", "description": "结束时间，格式 YYYY-MM-DDTHH:MM:SS+08:00"},
-                "description":    {"type": "string", "description": "事件描述（可选）"},
-                "calendar_id":    {"type": "string", "description": "日历 ID，默认 'primary'"},
-            },
-            "required": ["summary", "start_datetime", "end_datetime"],
-        },
-    },
-    {
-        "name": "get_feishu_messages",
-        "description": "获取飞书指定会话的最近消息记录。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "chat_id": {"type": "string", "description": "飞书会话 ID"},
-                "limit":   {"type": "integer", "description": "最多获取多少条，默认 20"},
-            },
-            "required": ["chat_id"],
-        },
-    },
-    {
-        "name": "send_feishu_message",
-        "description": "通过飞书发送文字消息给指定用户或群。不可逆操作，执行前必须告知用户并确认。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "receive_id":      {"type": "string", "description": "接收方 ID"},
-                "text":            {"type": "string", "description": "消息内容"},
-                "receive_id_type": {"type": "string", "description": "ID 类型：open_id / user_id / email / chat_id"},
-            },
-            "required": ["receive_id", "text"],
-        },
-    },
-]
-
-async def _handle_get_calendar(start_date: str, end_date: str, calendar_id: str = "primary") -> str:
-    return await get_calendar(start_date, end_date, calendar_id)
-
-async def _handle_create_calendar_event(summary: str, start_datetime: str, end_datetime: str, description: str = "", calendar_id: str = "primary") -> str:
-    return await create_calendar_event(summary, start_datetime, end_datetime, description, calendar_id)
-
-async def _handle_get_feishu_messages(chat_id: str, limit: int = 20) -> str:
-    return await get_feishu_messages(chat_id, limit)
-
-async def _handle_send_feishu_message(receive_id: str, text: str, receive_id_type: str = "open_id") -> str:
-    return await send_feishu_message(receive_id, text, receive_id_type)
-
-FEISHU_HANDLERS = {
-    "get_calendar":          _handle_get_calendar,
-    "create_calendar_event": _handle_create_calendar_event,
-    "get_feishu_messages":   _handle_get_feishu_messages,
-    "send_feishu_message":   _handle_send_feishu_message,
-}
-
-
-def register_feishu_tools():
-    """在应用启动时调用，把飞书工具注册进主控。"""
-    for defn in FEISHU_TOOL_DEFS:
-        register_tool(defn, FEISHU_HANDLERS[defn["name"]])

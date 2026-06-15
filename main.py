@@ -20,23 +20,20 @@ import uvicorn
 
 from core.controller import controller
 from core import memory as mem
+from core import registry
 from core.safety import safe_filename
 from core.tool_builder import (
     register_meta_tools, load_all_active_skills,
     activate_skill, deactivate_skill,
     list_skills_info, read_skill_code
 )
-from connectors.feishu import register_feishu_tools
-from connectors.document import register_document_tools
-from connectors.credentials import register_credential_tools, ingest_image, scan_image, scan_images
+from connectors.credentials import ingest_image, scan_image, scan_images
 from connectors import vault
 from core.scheduler import get_scheduler, load_all_active_schedules
 
-# 注册工具（顺序：先内置元工具，再外部连接器）
+# 注册工具：先内置元工具，再自动发现 connectors/ 下所有连接器（@tool 自注册 + 遗留 register_*_tools）
 register_meta_tools()
-register_feishu_tools()
-register_document_tools()
-register_credential_tools()
+registry.discover_connectors()
 
 # 启动时加载所有已激活的自建技能
 load_all_active_skills()
