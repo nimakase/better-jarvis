@@ -13,6 +13,7 @@ from pathlib import Path
 from core.controller import register_tool
 from connectors import vault
 from connectors import cred_ocr
+from core.results import ToolResult, Action
 
 
 # ── 本机识别并保存（不经云端）─────────────────────────────────────────────────
@@ -101,14 +102,12 @@ async def _t_reveal_credential(alias: str, fields: str = "") -> str:
         return f"「{alias}」下没有找到{('字段 ' + fields) if fields else '任何字段'}。"
 
     preview = {k: vault.mask_value(k, v) for k, v in real.items() if k != "_raw_lines"}
-    # 这个 JSON 会成为 tool 结果进入对话历史 —— 只含脱敏值，安全。
-    return json.dumps({
-        "__credential_reveal__": True,
-        "alias": alias,
-        "fields": [k for k in real.keys() if k != "_raw_lines"],
-        "preview": preview,
-        "message": f"已在网页上安全显示「{alias}」的：{('、'.join(preview.keys()))}（此处仅脱敏）。",
-    }, ensure_ascii=False)
+    field_names = [k for k in real.keys() if k != "_raw_lines"]
+    # text 进入对话历史 —— 只含脱敏信息，安全；真实值经 credential_reveal 动作由 main.py 本机解密后推前端。
+    message = f"已在网页上安全显示「{alias}」的：{('、'.join(preview.keys()))}（此处仅脱敏）。"
+    return ToolResult(text=message, actions=[Action("credential_reveal", {
+        "alias": alias, "fields": field_names,
+    })])
 
 
 # ── 工具：手动补充/修改字段 ───────────────────────────────────────────────────

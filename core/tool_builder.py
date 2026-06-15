@@ -28,6 +28,7 @@ from openai import AsyncOpenAI
 import config
 from core.controller import register_tool
 from core.safety import safe_name, is_safe_name
+from core.results import ToolResult, Action
 
 # ── 静态代码验证 ──────────────────────────────────────────────────────────────
 
@@ -391,22 +392,15 @@ async def create_tool(name: str, request: str) -> str:
     # 检查是否已存在
     existing = read_skill_code(name)
     if existing:
-        return json.dumps({
-            "__skill_action__": "already_exists",
-            "name": name,
-            "message": f"工具 {name} 已存在。如需修改，请说「修改 {name} 工具」。"
-        }, ensure_ascii=False)
+        return f"工具 {name} 已存在。如需修改，请说「修改 {name} 工具」。"
 
     try:
         code = await _generate_code(name, request)
         _, validation = save_skill_draft(name, code, request)
-        return json.dumps({
-            "__skill_action__": "code_review",
-            "name": name,
-            "code": code,
-            "validation": validation,
-            "message": f"工具 {name} 代码已生成，等待你审查并激活。"
-        }, ensure_ascii=False)
+        message = f"工具 {name} 代码已生成，等待你审查并激活。"
+        return ToolResult(text=message, actions=[Action("code_review", {
+            "name": name, "code": code, "validation": validation, "message": message,
+        })])
     except Exception as e:
         return f"生成工具失败：{e}"
 
@@ -461,13 +455,10 @@ async def edit_tool(name: str, change_request: str) -> str:
             "validation": validation,
         }
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        return json.dumps({
-            "__skill_action__": "code_review",
-            "name": name,
-            "code": new_code,
-            "validation": validation,
-            "message": f"工具 {name} 代码已修改，等待你审查并重新激活。"
-        }, ensure_ascii=False)
+        message = f"工具 {name} 代码已修改，等待你审查并重新激活。"
+        return ToolResult(text=message, actions=[Action("code_review", {
+            "name": name, "code": new_code, "validation": validation, "message": message,
+        })])
     except Exception as e:
         return f"修改工具失败：{e}"
 
@@ -679,12 +670,11 @@ async def _handle_send_file_to_chat(file_path: str, filename: str = "") -> str:
     if not fp.exists():
         return f"文件不存在：{file_path}"
     name = filename or fp.name
-    return _json.dumps({
-        "__file_action__": "download",
-        "file_path": str(fp),
-        "filename":  name,
-        "size":      fp.stat().st_size,
-    }, ensure_ascii=False)
+    size = fp.stat().st_size
+    return ToolResult(
+        text=f"已将文件「{name}」发送到对话界面，可点击下载。",
+        actions=[Action("file_download", {"file_path": str(fp), "filename": name, "size": size})],
+    )
 
 
 async def _handle_create_tool(name: str, request: str) -> str:

@@ -145,10 +145,8 @@ async def websocket_chat(websocket: WebSocket):
 
             await websocket.send_text(json.dumps({"type": "end"}))
 
-            # 检查 tool 结果中的特殊动作
-            _check_and_send_skill_actions(websocket, controller.messages)
-            _check_and_send_file_actions(websocket, controller.messages)
-            _check_and_send_credential_actions(websocket, controller.messages)
+            # 处理本轮工具产生的带外动作（代码审查 / 文件下载 / 证件揭示）
+            await _dispatch_actions(websocket, controller.drain_actions())
 
     except WebSocketDisconnect:
         pass
@@ -159,110 +157,61 @@ async def websocket_chat(websocket: WebSocket):
             pass
 
 
-def _check_and_send_skill_actions(ws: WebSocket, messages: list):
+async def _dispatch_actions(ws: WebSocket, actions: list):
+    """处理本轮工具产生的带外动作（来自 controller.drain_actions()）。
+
+    取代早期「扫描消息历史里的魔法 JSON」做法：动作由工具显式返回，
+    类型明确、不进对话历史 / 云端。逐个分发，单个失败不影响其余。
     """
-    扫描最近的 tool 结果消息，如果有 __skill_action__ 就发 code_review 事件。
-    用 asyncio.create_task 异步发送，不阻塞主循环。
-    """
-    for msg in reversed(messages[-6:]):
-        content = msg.get("content", "")
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("role") == "tool":
-                    _try_emit_skill_action(ws, block.get("content", ""))
-        elif isinstance(content, str):
-            _try_emit_skill_action(ws, content)
+    for action in actions:
+        try:
+            await _dispatch_one(ws, action)
+        except Exception:
+            pass
 
 
-def _try_emit_skill_action(ws: WebSocket, text: str):
-    if not isinstance(text, str) or "__skill_action__" not in text:
-        return
-    try:
-        # text 可能混有其他内容，找 JSON 部分
-        start = text.find("{")
-        end   = text.rfind("}") + 1
-        data  = json.loads(text[start:end])
-        if data.get("__skill_action__") == "code_review":
-            asyncio.ensure_future(
-                ws.send_text(json.dumps({
-                    "type":       "code_review",
-                    "name":       data["name"],
-                    "code":       data["code"],
-                    "message":    data.get("message", ""),
-                    "validation": data.get("validation", {}),
-                }))
-            )
-    except Exception:
-        pass
+async def _dispatch_one(ws: WebSocket, action):
+    kind = action.type
+    p = action.payload
 
+    if kind == "code_review":
+        # 把生成 / 修改的工具代码推给前端审查
+        await ws.send_text(json.dumps({
+            "type":       "code_review",
+            "name":       p["name"],
+            "code":       p["code"],
+            "message":    p.get("message", ""),
+            "validation": p.get("validation", {}),
+        }))
 
-def _check_and_send_file_actions(ws: WebSocket, messages: list):
-    for msg in reversed(messages[-6:]):
-        content = msg.get("content", "")
-        if isinstance(content, str):
-            _try_emit_file_action(ws, content)
+    elif kind == "file_download":
+        # 拷到下载目录并推下载卡片
+        src = Path(p["file_path"])
+        if src.exists():
+            shutil.copy2(src, DOWNLOAD_DIR / p["filename"])
+        await ws.send_text(json.dumps({
+            "type":     "file_download",
+            "filename": p["filename"],
+            "url":      f"/api/download/{p['filename']}",
+            "size":     p.get("size", 0),
+        }))
 
-
-def _try_emit_file_action(ws: WebSocket, text: str):
-    if not isinstance(text, str) or "__file_action__" not in text:
-        return
-    try:
-        start = text.find("{")
-        end   = text.rfind("}") + 1
-        data  = json.loads(text[start:end])
-        if data.get("__file_action__") == "download":
-            src = Path(data["file_path"])
-            if src.exists():
-                dest = DOWNLOAD_DIR / data["filename"]
-                shutil.copy2(src, dest)
-            asyncio.ensure_future(
-                ws.send_text(json.dumps({
-                    "type":     "file_download",
-                    "filename": data["filename"],
-                    "url":      f"/api/download/{data['filename']}",
-                    "size":     data.get("size", 0),
-                }))
-            )
-    except Exception:
-        pass
-
-
-def _check_and_send_credential_actions(ws: WebSocket, messages: list):
-    """
-    扫描最近的 tool 结果，发现 __credential_reveal__ 标记则：
-      在本机解密取出【真实】字段值，经 WebSocket 直接推到浏览器显示。
-    真实值只走「加密库 → 本机 main.py → 用户浏览器」，绝不进入对话历史 / 云端。
-    """
-    for msg in reversed(messages[-6:]):
-        content = msg.get("content", "")
-        if isinstance(content, str):
-            _try_emit_credential_reveal(ws, content)
-
-
-def _try_emit_credential_reveal(ws: WebSocket, text: str):
-    if not isinstance(text, str) or "__credential_reveal__" not in text:
-        return
-    try:
-        start = text.find("{")
-        end   = text.rfind("}") + 1
-        data  = json.loads(text[start:end])
-        if not data.get("__credential_reveal__"):
-            return
-        alias  = data["alias"]
-        fields = data.get("fields") or None
+    elif kind == "credential_reveal":
+        # 在本机解密取出【真实】字段值，仅推往本机浏览器。
+        # 真实值只走「加密库 → 本机 main.py → 浏览器」，绝不进入对话历史 / 云端。
+        alias  = p["alias"]
+        fields = p.get("fields") or None
         real   = vault.get_fields(alias, only=fields)  # 本机解密
         if not real:
             return
         real.pop("_raw_lines", None)
         meta = vault.get_meta(alias) or {}
-        asyncio.ensure_future(ws.send_text(json.dumps({
+        await ws.send_text(json.dumps({
             "type":       "credential_reveal",
             "alias":      alias,
             "type_label": vault.TYPE_LABELS.get(meta.get("cred_type"), meta.get("cred_type", "")),
             "values":     real,        # 真实值，仅发往本机浏览器
-        }, ensure_ascii=False)))
-    except Exception:
-        pass
+        }, ensure_ascii=False))
 
 
 # ── 证件保险箱 API（全部本机处理，不经云端模型）─────────────────────────────

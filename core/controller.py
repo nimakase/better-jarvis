@@ -15,6 +15,7 @@ from openai import AsyncOpenAI
 import config
 from core import memory as mem
 from core import registry
+from core.results import ToolResult
 # 向后兼容：连接器/技能仍可 `from core.controller import register_tool`
 from core.registry import register_tool
 
@@ -206,21 +207,28 @@ async def _safe_call(handler, *args, **kwargs):
     return result
 
 
-async def _execute_tool(name: str, inputs: dict) -> str:
+def _normalize_result(raw) -> ToolResult:
+    """把 handler 的返回归一化为 ToolResult（旧式 str 自动包装）。"""
+    return raw if isinstance(raw, ToolResult) else ToolResult(text=str(raw))
+
+
+async def _execute_tool(name: str, inputs: dict) -> ToolResult:
     if name in BUILTIN_HANDLERS:
         try:
-            return await _safe_call(BUILTIN_HANDLERS[name], inputs)
+            raw = await _safe_call(BUILTIN_HANDLERS[name], inputs)
         except Exception as e:
-            return f"工具执行出错：{e}"
+            raw = f"工具执行出错：{e}"
+        return _normalize_result(raw)
 
     handler = registry.get_handler(name)
     if handler is not None:
         try:
-            return await _safe_call(handler, **inputs)
+            raw = await _safe_call(handler, **inputs)
         except Exception as e:
-            return f"工具 {name} 执行出错：{e}"
+            raw = f"工具 {name} 执行出错：{e}"
+        return _normalize_result(raw)
 
-    return f"未知工具：{name}"
+    return ToolResult(text=f"未知工具：{name}")
 
 
 # ── 主控对话循环 ──────────────────────────────────────────────────────────────
@@ -232,9 +240,17 @@ class JarvisController:
             base_url=config.OPENROUTER_BASE_URL,
         )
         self.messages: list[dict] = []
+        self.pending_actions: list = []
 
     def reset_session(self):
         self.messages = []
+        self.pending_actions = []
+
+    def drain_actions(self) -> list:
+        """取出并清空本轮累积的带外动作（供传输层 main.py 处理）。"""
+        actions = self.pending_actions
+        self.pending_actions = []
+        return actions
 
     def get_all_tools(self) -> list[dict]:
         """返回 OpenAI function calling 格式的工具列表。"""
@@ -243,6 +259,7 @@ class JarvisController:
 
     async def chat(self, user_message: str) -> AsyncGenerator[str, None]:
         """流式处理用户消息，内部自动处理工具调用循环。"""
+        self.pending_actions = []
         self.messages = await _compress_history(self.client, self.messages)
         self.messages.append({"role": "user", "content": user_message})
 
@@ -320,10 +337,11 @@ class JarvisController:
                 except json.JSONDecodeError:
                     inputs = {}
                 result = await _execute_tool(tc["name"], inputs)
+                self.pending_actions.extend(result.actions)
                 self.messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
-                    "content": result,
+                    "content": result.text,
                 })
 
             # 继续循环，让模型消化工具结果
