@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 
+import config
 from core import registry
 from core.context import AppContext
 from core.tool_builder import register_meta_tools, load_all_active_skills
@@ -62,7 +63,7 @@ app.include_router(web_files.router)
 
 def main():
     """控制台入口（pip 安装后可用 `jarvis` 命令启动）。"""
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=False)
+    uvicorn.run("main:app", host=config.HOST, port=config.PORT, reload=False)
 
 
 if __name__ == "__main__":
