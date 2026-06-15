@@ -23,8 +23,6 @@ import os
 from pathlib import Path
 from typing import Optional
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
 from core.controller import register_tool
 

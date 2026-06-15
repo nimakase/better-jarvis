@@ -25,8 +25,6 @@ from typing import Optional
 
 from openai import AsyncOpenAI
 
-import sys as _sys
-_sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
 from core.controller import register_tool
 from core.safety import safe_name, is_safe_name

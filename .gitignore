@@ -21,6 +21,10 @@ venv/
 skills/
 schedules/
 
+# 本地备份快照（不入库）
+better jarvis/
+*_backup_*.zip
+
 # 系统文件
 .DS_Store
 Thumbs.db

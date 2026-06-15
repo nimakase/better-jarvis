@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jarvis"
+version = "0.1.0"
+description = "贾维斯 —— 本地优先的个人 AI 助理（FastAPI + WebSocket + OpenRouter）"
+readme = "ARCHITECTURE.md"
+requires-python = ">=3.10"
+authors = [{ name = "Ned" }]
+
+# 运行所需的核心依赖（与 requirements.txt 保持一致）
+dependencies = [
+    "openai>=1.35.0",
+    "fastapi>=0.111.0",
+    "uvicorn>=0.30.0",
+    "websockets>=12.0",
+    "httpx>=0.27.0",
+    "cryptography>=42.0.0",
+    "keyring>=25.0.0",
+    "python-dotenv>=1.0.0",
+    "apscheduler>=3.10.0",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+# 文档解析（read_document 工具按需使用）
+documents = [
+    "pdfplumber>=0.11.0",
+    "python-docx>=1.1.0",
+    "openpyxl>=3.1.0",
+    "python-pptx>=0.6.23",
+]
+# 本机证件 OCR
+ocr = [
+    "rapidocr-onnxruntime>=1.3.0",
+]
+# 全部可选依赖
+all = [
+    "pdfplumber>=0.11.0",
+    "python-docx>=1.1.0",
+    "openpyxl>=3.1.0",
+    "python-pptx>=0.6.23",
+    "rapidocr-onnxruntime>=1.3.0",
+]
+
+[project.scripts]
+jarvis = "main:main"
+
+# ── 扁平布局打包说明 ──────────────────────────────────────────────
+# 当前保持仓库根目录的扁平结构（顶层模块 + core/connectors 子包）。
+# 推荐用 `pip install -e .` 做开发安装：文件留在原地，
+# main.py 的 Path(__file__).parent 仍指向仓库根，frontend/ 等资源照常可用。
+# （后续步骤再考虑收进 jarvis/ 命名空间包并把 frontend 作为 package-data 分发。）
+[tool.setuptools]
+py-modules = ["main", "config"]
+
+[tool.setuptools.packages.find]
+include = ["core*", "connectors*"]
+exclude = ["skills*", "schedules*", "data*", "frontend*", "better jarvis*"]

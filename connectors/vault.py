@@ -20,8 +20,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
 # 复用 memory 子系统的 Fernet 加密与数据库连接（同一个 memory.db，但用独立表）
 from core.memory import encrypt, decrypt, _get_conn, _fernet_instance

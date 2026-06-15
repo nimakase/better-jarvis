@@ -22,9 +22,6 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
 from core.controller import register_tool
 

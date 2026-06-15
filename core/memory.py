@@ -20,8 +20,6 @@ from typing import Any, Optional
 from cryptography.fernet import Fernet
 import keyring
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
 
 # ── 加密 ──────────────────────────────────────────────────────────────────────

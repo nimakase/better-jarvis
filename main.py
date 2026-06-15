@@ -442,5 +442,10 @@ async def health():
 
 # ── 启动 ──────────────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
+def main():
+    """控制台入口（pip 安装后可用 `jarvis` 命令启动）。"""
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=False)
+
+
+if __name__ == "__main__":
+    main()

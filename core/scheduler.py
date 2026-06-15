@@ -32,8 +32,6 @@ from typing import Optional
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
 from core.safety import safe_name, is_safe_name
 
