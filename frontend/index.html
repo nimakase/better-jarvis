@@ -685,6 +685,23 @@ const ICON = {
 
 // ── WebSocket ──────────────────────────────────────────────────────────────
 
+// 会话 ID：存 sessionStorage —— 刷新后延续同一对话，新标签页则是独立新会话
+const JARVIS_SESSION_ID = (() => {
+  let id = sessionStorage.getItem("jarvis_session_id");
+  if (!id) {
+    id = (window.crypto && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : String(Date.now()) + Math.random().toString(16).slice(2);
+    sessionStorage.setItem("jarvis_session_id", id);
+  }
+  return id;
+})();
+
+// 统一发送：自动附带 session_id，让后端按会话分桌
+function wsSend(payload) {
+  ws.send(JSON.stringify({ ...payload, session_id: JARVIS_SESSION_ID }));
+}
+
 function connect() {
   const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
   ws = new WebSocket(`${wsProto}//${location.host}/ws/chat`);
@@ -1071,7 +1088,7 @@ async function uploadFile(file) {
 
     const prompt = `请读取并分析这个文件，告诉我里面的主要内容：${data.path}`;
     addUserMessage(`📄 ${file.name}`);
-    ws.send(JSON.stringify({ message: prompt }));
+    wsSend({ message: prompt });
 
   } catch (err) {
     uploadBar.classList.remove("active");
@@ -1172,13 +1189,13 @@ function sendMessage() {
   const text = inputEl.value.trim();
   if (!text || sendBtn.disabled) return;
   addUserMessage(text);
-  ws.send(JSON.stringify({ message: text }));
+  wsSend({ message: text });
   inputEl.value = "";
   inputEl.style.height = "38px";
 }
 
-function resetSession() { ws.send(JSON.stringify({ message: "/reset" })); }
-function showMemory()   { ws.send(JSON.stringify({ message: "/memory" })); }
+function resetSession() { wsSend({ message: "/reset" }); }
+function showMemory()   { wsSend({ message: "/memory" }); }
 
 // ── 代码审查卡片 ───────────────────────────────────────────────────────────
 
