@@ -29,6 +29,7 @@ import sys as _sys
 _sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
 from core.controller import register_tool
+from core.safety import safe_name, is_safe_name
 
 # ── 静态代码验证 ──────────────────────────────────────────────────────────────
 
@@ -109,6 +110,22 @@ def validate_tool_code(code: str) -> dict:
         if pattern in code:
             warnings.append(f"检测到 `{pattern}`：{reason}")
 
+    # 3.5 SQL 拼接检查（AST）：execute/executemany 的 SQL 参数若是
+    #     f-string / 字符串相加 / .format，提示改用参数化查询，防注入。
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("execute", "executemany") and node.args):
+            a0 = node.args[0]
+            unsafe = (
+                isinstance(a0, ast.JoinedStr)  # f-string
+                or (isinstance(a0, ast.BinOp) and isinstance(a0.op, ast.Add))  # "..." + x
+                or (isinstance(a0, ast.Call) and isinstance(a0.func, ast.Attribute)
+                    and a0.func.attr == "format")  # "...".format(...)
+            )
+            if unsafe:
+                warnings.append("SQL 用 f-string/+/.format 拼接，存在注入风险，请改用参数化查询（? 占位符 + 参数元组）")
+                break
+
     # 4. 必要结构检查
     has_tool_def = "TOOL_DEF" in code
     if not has_tool_def:
@@ -154,6 +171,15 @@ CODE_GEN_PROMPT = '''你是一个 Python 工具开发助手。根据用户需求
 6. 工具函数必须返回 str（结果或错误信息）
 7. 用 try/except 包住主逻辑，出错返回错误描述而不是抛异常
 8. 只输出 Python 代码，不要任何额外说明，不要 markdown 代码块标记
+
+【安全与转义（重要，避免注入类 bug）】
+数据进入"另一种语法"之前必须按目标语境处理，绝不能让数据被当成语法执行：
+- SQL：一律参数化查询，如 cursor.execute("... WHERE k = ?", (val,))。禁止用 f-string / + / .format 拼接 SQL。
+- 文件路径：外部/用户/模型传入的名字先做白名单校验（只允许 [A-Za-z0-9_-]），或用 Path(x).name 去掉目录部分，并确认最终路径 .resolve() 后仍在预期基目录内，禁止把外部字符串直接拼进路径（防 ../ 或绝对路径越权）。
+- URL：变量拼进 URL 前，路径段用 urllib.parse.quote、查询参数用 quote_plus 编码。
+- 生成 HTML/JS：对插入的文本做 HTML 转义；不要用字符串拼接生成内联事件处理器（onclick 等），改用 data-* 属性或 addEventListener。
+- JSON：用 json.dumps 生成，禁止手写字符串拼 JSON。
+- 始终把用户、网络、模型返回的内容当作不可信数据处理。
 
 【跨平台规则（Windows + macOS 必须同时兼容）】
 - 所有文件路径使用 pathlib.Path，禁止硬编码 /Users/xxx 或 C:/Users/xxx
@@ -212,7 +238,7 @@ async def _generate_code(tool_name: str, user_request: str) -> str:
 # ── 保存 & 加载 ───────────────────────────────────────────────────────────────
 
 def _skill_dir(name: str) -> Path:
-    return SKILLS_DIR / name
+    return SKILLS_DIR / safe_name(name)   # safe_name 防路径穿越，非法名抛 ValueError
 
 
 def save_skill_draft(name: str, code: str, description: str) -> tuple[Path, dict]:
@@ -235,7 +261,10 @@ def save_skill_draft(name: str, code: str, description: str) -> tuple[Path, dict
 
 def activate_skill(name: str) -> tuple[bool, str]:
     """激活一个 draft 技能：加载、注册、更新 meta。返回 (success, message)。"""
-    d = _skill_dir(name)
+    try:
+        d = _skill_dir(name)
+    except ValueError as e:
+        return False, str(e)
     tool_path = d / "tool.py"
     meta_path = d / "meta.json"
 
@@ -277,7 +306,10 @@ def activate_skill(name: str) -> tuple[bool, str]:
 
 def deactivate_skill(name: str) -> tuple[bool, str]:
     """将技能标记为 inactive（不卸载当前进程，重启后不加载）。"""
-    meta_path = _skill_dir(name) / "meta.json"
+    try:
+        meta_path = _skill_dir(name) / "meta.json"
+    except ValueError as e:
+        return False, str(e)
     if not meta_path.exists():
         return False, "技能不存在"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -327,7 +359,10 @@ def list_skills_info() -> list[dict]:
 
 
 def read_skill_code(name: str) -> Optional[str]:
-    tool_path = _skill_dir(name) / "tool.py"
+    try:
+        tool_path = _skill_dir(name) / "tool.py"
+    except ValueError:
+        return None
     if not tool_path.exists():
         return None
     return tool_path.read_text(encoding="utf-8")
@@ -335,7 +370,10 @@ def read_skill_code(name: str) -> Optional[str]:
 
 def update_skill_code(name: str, new_code: str) -> tuple[bool, str]:
     """更新技能代码（保持当前激活状态不变，需重新激活才生效）。"""
-    d = _skill_dir(name)
+    try:
+        d = _skill_dir(name)
+    except ValueError as e:
+        return False, str(e)
     if not d.exists():
         return False, "技能不存在"
     (d / "tool.py").write_text(new_code, encoding="utf-8")
@@ -350,6 +388,8 @@ async def create_tool(name: str, request: str) -> str:
     name:    工具名（snake_case，如 stock_price）
     request: 对工具功能的详细描述
     """
+    if not is_safe_name(name):
+        return f"工具名非法：{name!r}（只允许字母、数字、下划线、连字符，长度 1-64）"
     # 检查是否已存在
     existing = read_skill_code(name)
     if existing:
@@ -379,6 +419,8 @@ async def edit_tool(name: str, change_request: str) -> str:
     name:           工具名
     change_request: 描述要做什么修改
     """
+    if not is_safe_name(name):
+        return f"工具名非法：{name!r}（只允许字母、数字、下划线、连字符，长度 1-64）"
     existing = read_skill_code(name)
     if not existing:
         return f"工具 {name} 不存在，请先用 create_tool 创建。"
@@ -399,7 +441,28 @@ async def edit_tool(name: str, change_request: str) -> str:
             lines = new_code.split("\n")
             new_code = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
 
-        _, validation = save_skill_draft(name, new_code, change_request)
+        # 保留原始 description，不用 change_request 覆盖
+        d = _skill_dir(name)
+        meta_path = d / "meta.json"
+        orig_description = ""
+        if meta_path.exists():
+            try:
+                orig_description = json.loads(meta_path.read_text(encoding="utf-8")).get("description", "")
+            except Exception:
+                pass
+
+        validation = validate_tool_code(new_code)
+        d.mkdir(exist_ok=True)
+        (d / "tool.py").write_text(new_code, encoding="utf-8")
+        meta = {
+            "status": "draft",
+            "description": orig_description or change_request,
+            "created_at": json.loads(meta_path.read_text(encoding="utf-8")).get("created_at", datetime.now(timezone.utc).isoformat()) if meta_path.exists() else datetime.now(timezone.utc).isoformat(),
+            "last_edited_at": datetime.now(timezone.utc).isoformat(),
+            "last_change": change_request,
+            "validation": validation,
+        }
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         return json.dumps({
             "__skill_action__": "code_review",
             "name": name,
@@ -421,6 +484,49 @@ async def list_tools_meta() -> str:
         status_icon = {"active": "✅", "draft": "📝", "inactive": "⏸️"}.get(s["status"], "❓")
         lines.append(f"{status_icon} {s['name']} — {s['description'][:40]}")
     return "\n".join(lines)
+
+
+def delete_skill(name: str) -> tuple[bool, str]:
+    """删除一个工具（包括代码和元数据）。"""
+    import shutil as _shutil
+    try:
+        d = _skill_dir(name)
+    except ValueError as e:
+        return False, str(e)
+    if not d.exists():
+        return False, f"工具 {name} 不存在"
+    _shutil.rmtree(d)
+    return True, f"工具 {name} 已删除"
+
+
+async def cleanup_drafts(confirm_delete: list = None) -> str:
+    """
+    列出所有草稿工具；如果传入 confirm_delete，则删除指定工具。
+    confirm_delete: 要删除的工具名列表，不传则仅展示草稿列表
+    """
+    skills = list_skills_info()
+    drafts = [s for s in skills if s["status"] == "draft"]
+
+    if not confirm_delete:
+        if not drafts:
+            return "没有草稿工具，工具库干净。"
+        lines = ["【草稿工具列表】（以下工具尚未激活）"]
+        for s in drafts:
+            created = (s.get("created_at") or "")[:10]
+            lines.append(f"📝 {s['name']}（{created}）— {s['description'][:50]}")
+        lines.append("\n告诉我哪些可以删除，我来执行。")
+        return "\n".join(lines)
+
+    deleted, errors = [], []
+    for name in confirm_delete:
+        ok, msg = delete_skill(name)
+        (deleted if ok else errors).append(msg)
+    parts = []
+    if deleted:
+        parts.append("已删除：" + "、".join(deleted))
+    if errors:
+        parts.append("失败：" + "；".join(errors))
+    return "\n".join(parts)
 
 
 # ── 工具定义 ──────────────────────────────────────────────────────────────────
@@ -459,6 +565,54 @@ META_TOOL_DEFS = [
         "name": "list_tools_meta",
         "description": "列出所有自建工具及其状态（激活/草稿/停用）。",
         "input_schema": {"type": "object", "properties": {}}
+    },
+    {
+        "name": "send_file_to_chat",
+        "description": (
+            "将本地文件发送到网页对话界面，用户可直接点击下载。"
+            "适用于：生成报告、导出数据、输出文档后让用户下载的场景。"
+            "不需要飞书，直接在当前对话窗口显示下载卡片。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "要发送的本地文件完整路径"},
+                "filename":  {"type": "string", "description": "显示给用户的文件名（可省略，默认用原文件名）"},
+            },
+            "required": ["file_path"]
+        }
+    },
+    {
+        "name": "delete_tool",
+        "description": (
+            "删除一个自建工具。当用户说「删除X工具」、「把X工具删掉」时使用。"
+            "激活状态的工具也可以删除（重启后不再加载）。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "要删除的工具名"},
+            },
+            "required": ["name"]
+        }
+    },
+    {
+        "name": "cleanup_drafts",
+        "description": (
+            "清理草稿工具。先列出所有未激活的草稿，询问用户确认后再删除。"
+            "当用户说「清理草稿」、「删掉没用的工具」、「工具库太乱了」时使用。"
+            "第一步不传 confirm_delete 只列出草稿；用户确认后再传列表删除。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirm_delete": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "确认要删除的工具名列表。不传则仅展示草稿列表。"
+                },
+            },
+        }
     },
     {
         "name": "create_schedule",
@@ -520,6 +674,21 @@ META_TOOL_DEFS = [
     },
 ]
 
+async def _handle_send_file_to_chat(file_path: str, filename: str = "") -> str:
+    import json as _json
+    from pathlib import Path as _Path
+    fp = _Path(file_path)
+    if not fp.exists():
+        return f"文件不存在：{file_path}"
+    name = filename or fp.name
+    return _json.dumps({
+        "__file_action__": "download",
+        "file_path": str(fp),
+        "filename":  name,
+        "size":      fp.stat().st_size,
+    }, ensure_ascii=False)
+
+
 async def _handle_create_tool(name: str, request: str) -> str:
     return await create_tool(name=name, request=request)
 
@@ -528,6 +697,13 @@ async def _handle_edit_tool(name: str, change_request: str) -> str:
 
 async def _handle_list_tools_meta() -> str:
     return await list_tools_meta()
+
+async def _handle_delete_tool(name: str) -> str:
+    ok, msg = delete_skill(name)
+    return msg
+
+async def _handle_cleanup_drafts(confirm_delete: list = None) -> str:
+    return await cleanup_drafts(confirm_delete=confirm_delete)
 
 async def _handle_create_schedule(
     name: str, description: str, cron: str, prompt: str,
@@ -564,9 +740,12 @@ async def _handle_resume_schedule(name: str) -> str:
     return msg
 
 META_HANDLERS = {
+    "send_file_to_chat": _handle_send_file_to_chat,
     "create_tool":      _handle_create_tool,
     "edit_tool":        _handle_edit_tool,
     "list_tools_meta":  _handle_list_tools_meta,
+    "delete_tool":      _handle_delete_tool,
+    "cleanup_drafts":   _handle_cleanup_drafts,
     "create_schedule":  _handle_create_schedule,
     "list_schedules":   _handle_list_schedules,
     "delete_schedule":  _handle_delete_schedule,

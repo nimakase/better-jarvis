@@ -2,301 +2,557 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>贾维斯</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0a0b0f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="贾维斯">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <style>
+  :root {
+    /* 背景层次 */
+    --bg-0: #0a0b0f;        /* 最底层 */
+    --bg-1: #0f1117;        /* 消息区 */
+    --bg-2: #161922;        /* 顶栏 / 输入区 */
+    --bg-3: #1c2030;        /* 控件 */
+    --bg-hover: #232838;
+    --border: #242a3a;
+    --border-soft: #1b2030;
+
+    /* 文字 */
+    --text: #e6e8ee;
+    --text-dim: #9aa3b2;
+    --text-faint: #5a6373;
+
+    /* 主色 */
+    --accent: #6366f1;
+    --accent-2: #8b5cf6;
+    --accent-grad: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    --accent-soft: rgba(99, 102, 241, 0.14);
+    --accent-ring: rgba(99, 102, 241, 0.45);
+
+    /* 语义色 */
+    --green: #34d399;
+    --yellow: #fbbf24;
+    --red: #f87171;
+
+    --radius: 14px;
+    --radius-lg: 18px;
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+    --shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.25);
+  }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    background: #0f0f0f;
-    color: #e8e8e8;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background:
+      radial-gradient(1200px 600px at 50% -10%, rgba(99,102,241,0.10), transparent 60%),
+      var(--bg-0);
+    color: var(--text);
     height: 100vh;
     display: flex;
     flex-direction: column;
+    -webkit-font-smoothing: antialiased;
   }
 
-  /* 顶栏 */
+  /* 滚动条 */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2a3142; border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a4256; background-clip: padding-box; }
+
+  svg { display: block; }
+
+  /* ── 顶栏 ── */
   header {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 14px 20px;
-    border-bottom: 1px solid #222;
-    background: #141414;
+    padding: 13px 22px;
+    border-bottom: 1px solid var(--border-soft);
+    background: rgba(18, 21, 30, 0.72);
+    backdrop-filter: saturate(160%) blur(14px);
+    -webkit-backdrop-filter: saturate(160%) blur(14px);
+    position: relative;
+    z-index: 10;
   }
-  header h1 { font-size: 17px; font-weight: 600; color: #fff; }
+  .brand { display: flex; align-items: center; gap: 11px; }
+  .brand-logo {
+    width: 30px; height: 30px;
+    border-radius: 9px;
+    background: var(--accent-grad);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 14px rgba(99,102,241,0.4);
+    flex-shrink: 0;
+  }
+  header h1 { font-size: 16px; font-weight: 650; color: #fff; letter-spacing: 0.3px; }
+
   .status-dot {
     width: 8px; height: 8px;
     border-radius: 50%;
-    background: #3a3a3a;
-    transition: background 0.3s;
+    background: #39414f;
+    transition: background 0.3s, box-shadow 0.3s;
   }
-  .status-dot.online { background: #4ade80; }
-  .status-dot.typing { background: #facc15; animation: pulse 1s infinite; }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .status-dot.online { background: var(--green); box-shadow: 0 0 0 3px rgba(52,211,153,0.18); }
+  .status-dot.typing { background: var(--yellow); box-shadow: 0 0 0 3px rgba(251,191,36,0.18); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
 
   header .actions { margin-left: auto; display: flex; gap: 8px; }
   .btn-sm {
-    font-size: 12px; padding: 5px 10px;
-    background: #222; border: 1px solid #333;
-    color: #aaa; border-radius: 6px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12.5px; padding: 7px 12px;
+    background: var(--bg-3); border: 1px solid var(--border);
+    color: var(--text-dim); border-radius: 9px; cursor: pointer;
+    transition: all 0.15s;
   }
-  .btn-sm:hover { background: #2a2a2a; color: #fff; }
+  .btn-sm:hover { background: var(--bg-hover); color: #fff; border-color: #2f3850; }
+  .btn-sm svg { width: 15px; height: 15px; }
 
-  /* 消息区 */
+  /* ── 消息区 ── */
   #messages {
     flex: 1;
     overflow-y: auto;
-    padding: 24px 0;
+    padding: 26px 0 8px;
     scroll-behavior: smooth;
   }
 
   .message {
     display: flex;
-    gap: 12px;
-    padding: 10px 20px;
-    max-width: 860px;
+    gap: 13px;
+    padding: 9px 20px;
+    max-width: 880px;
     margin: 0 auto;
     width: 100%;
+    animation: rise 0.28s cubic-bezier(.2,.7,.3,1) both;
   }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
   .message.user { flex-direction: row-reverse; }
 
   .avatar {
     width: 32px; height: 32px;
-    border-radius: 50%;
+    border-radius: 10px;
     display: flex; align-items: center; justify-content: center;
     font-size: 13px; font-weight: 700;
     flex-shrink: 0;
+    box-shadow: var(--shadow-sm);
   }
-  .message.user .avatar      { background: #2563eb; color: #fff; }
-  .message.assistant .avatar { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
-  .message.system .avatar    { background: #1a1a1a; color: #555; }
+  .message.user .avatar      { background: var(--accent-grad); color: #fff; }
+  .message.assistant .avatar { background: #1b2130; color: var(--accent-2); border: 1px solid #2a3350; }
+  .message.system .avatar    { background: #14171f; color: var(--text-faint); box-shadow: none; }
 
   .bubble {
-    max-width: calc(100% - 50px);
-    line-height: 1.65;
+    max-width: calc(100% - 54px);
+    line-height: 1.68;
     font-size: 14.5px;
   }
   .message.user .bubble {
-    background: #1d4ed8;
+    background: var(--accent-grad);
     color: #fff;
-    border-radius: 14px 4px 14px 14px;
-    padding: 10px 14px;
+    border-radius: 16px 5px 16px 16px;
+    padding: 10px 15px;
+    box-shadow: 0 4px 16px rgba(99,102,241,0.28);
   }
   .message.assistant .bubble {
-    color: #e2e8f0;
+    color: #dfe3ec;
     white-space: pre-wrap;
     word-break: break-word;
+    padding-top: 4px;
   }
   .message.system .bubble {
-    color: #555;
+    color: var(--text-faint);
     font-size: 12px;
-    font-family: monospace;
-    background: #111;
-    border-radius: 6px;
-    padding: 8px 12px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    background: rgba(255,255,255,0.02);
+    border: 1px solid var(--border-soft);
+    border-radius: 9px;
+    padding: 9px 13px;
     white-space: pre-wrap;
     overflow-x: auto;
   }
 
   /* 文件预览气泡 */
+  .file-bubble svg { width: 18px; height: 18px; flex-shrink: 0; }
   .file-bubble {
     display: flex;
     align-items: center;
-    gap: 10px;
-    background: #1e3a5f;
-    border: 1px solid #2563eb44;
-    border-radius: 10px;
-    padding: 10px 14px;
-    max-width: 320px;
+    gap: 11px;
+    background: rgba(99,102,241,0.08);
+    border: 1px solid rgba(99,102,241,0.28);
+    border-radius: 13px;
+    padding: 11px 15px;
+    max-width: 330px;
+    transition: background 0.15s, border-color 0.15s;
   }
-  .file-icon { font-size: 22px; flex-shrink: 0; }
+  .file-icon { font-size: 22px; flex-shrink: 0; line-height: 1; }
   .file-info { overflow: hidden; }
-  .file-name { font-size: 13px; font-weight: 600; color: #93c5fd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .file-meta { font-size: 11px; color: #64748b; margin-top: 2px; }
+  .file-name { font-size: 13px; font-weight: 600; color: #c7cbff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file-meta { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
 
   .tool-indicator {
+    display: inline-flex; align-items: center; gap: 6px;
     font-size: 12px;
-    color: #64748b;
-    padding: 4px 0;
-    font-style: italic;
+    color: var(--accent-2);
+    padding: 3px 0;
+    font-style: normal;
   }
+  .tool-indicator svg { width: 14px; height: 14px; flex-shrink: 0; }
 
-  /* 代码审查卡片 */
+  /* ── 代码审查卡片 ── */
   .code-review-card {
-    max-width: 780px;
-    margin: 10px 20px;
-    margin-left: calc(20px + 44px);  /* 对齐助手气泡 */
-    border: 1px solid #1e3a5f;
-    border-radius: 10px;
+    max-width: 800px;
+    margin: 12px auto;
+    margin-left: calc(50% - 400px + 45px);
+    border: 1px solid #232a3d;
+    border-radius: 14px;
     overflow: hidden;
-    background: #0d1117;
+    background: #0d1018;
+    box-shadow: var(--shadow);
+    animation: rise 0.28s cubic-bezier(.2,.7,.3,1) both;
   }
+  @media (max-width: 920px) { .code-review-card { margin-left: 65px; margin-right: 20px; } }
   .code-review-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 10px 14px;
-    background: #161b22;
-    border-bottom: 1px solid #1e3a5f;
+    padding: 11px 15px;
+    background: #12161f;
+    border-bottom: 1px solid #1f2636;
   }
   .code-review-title {
+    display: inline-flex; align-items: center; gap: 7px;
     font-size: 13px;
     font-weight: 600;
-    color: #58a6ff;
-    font-family: monospace;
+    color: #a5b4fc;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
   }
+  .code-review-title svg { width: 15px; height: 15px; }
   .code-review-actions { display: flex; gap: 8px; }
   .btn-activate {
-    font-size: 12px; padding: 5px 14px;
-    background: #238636; border: 1px solid #2ea043;
-    color: #fff; border-radius: 6px; cursor: pointer;
-    font-weight: 600;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12.5px; padding: 6px 14px;
+    background: var(--accent-grad); border: none;
+    color: #fff; border-radius: 8px; cursor: pointer;
+    font-weight: 600; transition: filter 0.15s, opacity 0.15s;
   }
-  .btn-activate:hover { background: #2ea043; }
-  .btn-activate:disabled { background: #1a3a1f; color: #666; cursor: not-allowed; }
+  .btn-activate svg { width: 14px; height: 14px; flex-shrink: 0; }
+  .btn-activate:hover { filter: brightness(1.1); }
+  .btn-activate:disabled { background: #2a2030; color: #6b5a72; cursor: not-allowed; filter: none; }
   .btn-dismiss {
-    font-size: 12px; padding: 5px 10px;
-    background: #21262d; border: 1px solid #30363d;
-    color: #8b949e; border-radius: 6px; cursor: pointer;
+    font-size: 12.5px; padding: 6px 12px;
+    background: var(--bg-3); border: 1px solid var(--border);
+    color: var(--text-dim); border-radius: 8px; cursor: pointer;
+    transition: all 0.15s;
   }
-  .btn-dismiss:hover { background: #30363d; }
+  .btn-dismiss:hover { background: var(--bg-hover); color: #fff; }
   .code-block {
-    padding: 14px;
-    overflow-x: auto;
-    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    padding: 15px;
+    overflow: auto;
+    font-family: "JetBrains Mono", "Fira Code", ui-monospace, "Cascadia Code", monospace;
     font-size: 12.5px;
-    line-height: 1.6;
+    line-height: 1.65;
     color: #e6edf3;
     white-space: pre;
     max-height: 420px;
-    overflow-y: auto;
   }
   .code-review-footer {
-    padding: 8px 14px;
-    font-size: 11px;
-    color: #484f58;
-    border-top: 1px solid #161b22;
+    padding: 9px 15px;
+    font-size: 11.5px;
+    color: var(--text-faint);
+    border-top: 1px solid #161b26;
   }
 
   /* 验证横幅 */
   .validation-banner {
-    padding: 8px 14px;
-    font-size: 12px;
-    line-height: 1.5;
-    border-bottom: 1px solid #161b22;
+    padding: 9px 15px;
+    font-size: 12.5px;
+    line-height: 1.55;
+    border-bottom: 1px solid #161b26;
   }
-  .validation-banner ul { margin: 4px 0 0 16px; }
+  .validation-banner ul { margin: 5px 0 0 18px; }
   .validation-banner li { margin: 2px 0; }
-  .validation-banner.error   { background: #2d1117; color: #f85149; }
-  .validation-banner.warning { background: #2d2500; color: #e3b341; }
-  .validation-banner.ok      { background: #0d2818; color: #3fb950; }
+  .validation-banner.error   { background: rgba(248,113,113,0.08); color: var(--red); }
+  .validation-banner.warning { background: rgba(251,191,36,0.08); color: var(--yellow); }
+  .validation-banner.ok      { background: rgba(52,211,153,0.08); color: var(--green); }
 
-  /* 拖拽遮罩 */
+  /* ── 拖拽遮罩 ── */
   #drop-overlay {
     display: none;
     position: fixed; inset: 0;
-    background: #0f0f0fcc;
-    border: 3px dashed #3b82f6;
+    background: rgba(10,11,15,0.82);
+    backdrop-filter: blur(4px);
     z-index: 100;
     align-items: center;
     justify-content: center;
-    font-size: 20px;
-    color: #60a5fa;
     pointer-events: none;
   }
   #drop-overlay.active { display: flex; }
+  .drop-card {
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    padding: 44px 64px;
+    border: 2px dashed var(--accent);
+    border-radius: 20px;
+    background: rgba(99,102,241,0.06);
+    color: #c7cbff; font-size: 17px; font-weight: 600;
+  }
+  .drop-card svg { width: 44px; height: 44px; stroke: var(--accent-2); }
 
-  /* 输入区 */
+  /* ── 输入区 ── */
   footer {
-    padding: 12px 20px 16px;
-    border-top: 1px solid #1e1e1e;
-    background: #141414;
+    padding: 12px 20px 18px;
+    border-top: 1px solid var(--border-soft);
+    background: rgba(18, 21, 30, 0.72);
+    backdrop-filter: saturate(160%) blur(14px);
+    -webkit-backdrop-filter: saturate(160%) blur(14px);
   }
 
-  /* 上传进度条 */
   #upload-bar {
     display: none;
-    max-width: 860px;
-    margin: 0 auto 8px;
+    max-width: 880px;
+    margin: 0 auto 9px;
     height: 3px;
-    background: #1e1e1e;
-    border-radius: 2px;
+    background: var(--bg-3);
+    border-radius: 3px;
     overflow: hidden;
   }
   #upload-bar.active { display: block; }
   #upload-progress {
     height: 100%;
-    background: #3b82f6;
+    background: var(--accent-grad);
     width: 0%;
     transition: width 0.2s;
   }
 
-  .input-row {
+  .input-shell {
     display: flex;
     gap: 8px;
-    max-width: 860px;
+    max-width: 880px;
     margin: 0 auto;
     align-items: flex-end;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 7px 7px 7px 8px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .input-shell:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
   }
 
-  /* 上传按钮 */
-  #upload-btn {
-    width: 44px; height: 44px;
-    background: #1e1e1e;
-    border: 1px solid #2a2a2a;
+  .icon-btn {
+    width: 38px; height: 38px;
+    background: transparent;
+    border: none;
     border-radius: 10px;
-    color: #666; font-size: 20px;
-    cursor: pointer; flex-shrink: 0;
+    color: var(--text-faint); cursor: pointer; flex-shrink: 0;
     display: flex; align-items: center; justify-content: center;
     transition: all 0.15s;
   }
-  #upload-btn:hover { background: #2a2a2a; color: #aaa; border-color: #3b82f6; }
+  .icon-btn svg { width: 19px; height: 19px; }
+  .icon-btn:hover { background: var(--bg-3); color: var(--text-dim); }
 
   #input {
     flex: 1;
-    background: #1e1e1e;
-    border: 1px solid #2a2a2a;
-    border-radius: 10px;
-    color: #e8e8e8;
-    font-size: 14px;
-    padding: 11px 14px;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-size: 14.5px;
+    padding: 9px 4px;
     resize: none;
     line-height: 1.5;
     max-height: 160px;
-    min-height: 44px;
+    min-height: 38px;
     outline: none;
     font-family: inherit;
   }
-  #input:focus { border-color: #3b5bdb; }
-  #input::placeholder { color: #3a3a3a; }
+  #input::placeholder { color: var(--text-faint); }
 
   #send-btn {
-    width: 44px; height: 44px;
-    background: #2563eb;
-    border: none; border-radius: 10px;
-    color: #fff; font-size: 18px;
+    width: 38px; height: 38px;
+    background: var(--accent-grad);
+    border: none; border-radius: 11px;
+    color: #fff;
     cursor: pointer; flex-shrink: 0;
     display: flex; align-items: center; justify-content: center;
-    transition: background 0.15s;
+    transition: filter 0.15s, transform 0.1s, opacity 0.15s;
   }
-  #send-btn:hover { background: #1d4ed8; }
-  #send-btn:disabled { background: #1e2a4a; cursor: not-allowed; }
+  #send-btn svg { width: 18px; height: 18px; }
+  #send-btn:hover { filter: brightness(1.12); }
+  #send-btn:active { transform: scale(0.94); }
+  #send-btn:disabled { background: var(--bg-3); color: var(--text-faint); cursor: not-allowed; filter: none; }
 
-  .hint { font-size: 11px; color: #2a2a2a; text-align: center; margin-top: 8px; }
+  .hint { font-size: 11px; color: var(--text-faint); text-align: center; margin-top: 9px; opacity: 0.7; }
+  .hint kbd {
+    font-family: inherit; font-size: 10.5px;
+    background: var(--bg-3); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 5px; color: var(--text-dim);
+  }
+
+  /* ── 保险箱模态 ── */
+  #vault-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(6,7,11,0.7);
+    backdrop-filter: blur(6px);
+    z-index: 200;
+    align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  #vault-overlay.active { display: flex; }
+  .vault-modal {
+    width: 100%; max-width: 560px;
+    max-height: 86vh; overflow-y: auto;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    box-shadow: var(--shadow);
+    animation: rise 0.25s cubic-bezier(.2,.7,.3,1) both;
+  }
+  .vault-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-soft);
+    position: sticky; top: 0;
+    background: var(--bg-2);
+    border-radius: 18px 18px 0 0;
+    z-index: 1;
+  }
+  .vault-head svg { width: 18px; height: 18px; stroke: var(--accent-2); }
+  .vault-head h2 { font-size: 15px; font-weight: 650; color: #fff; }
+  .vault-head .close { margin-left: auto; }
+  .vault-note {
+    margin: 0 20px; margin-top: 14px;
+    font-size: 11.5px; line-height: 1.5;
+    color: var(--text-dim);
+    background: rgba(99,102,241,0.07);
+    border: 1px solid rgba(99,102,241,0.2);
+    border-radius: 10px; padding: 9px 12px;
+  }
+  .vault-section { padding: 16px 20px; }
+  .vault-section h3 {
+    font-size: 12px; font-weight: 600; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;
+  }
+  .cred-card {
+    border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px 14px;
+    margin-bottom: 10px; background: var(--bg-2);
+  }
+  .cred-top { display: flex; align-items: center; gap: 8px; }
+  .cred-alias { font-size: 14px; font-weight: 650; color: #fff; }
+  .cred-type {
+    font-size: 11px; color: var(--accent-2);
+    background: var(--accent-soft); border-radius: 5px; padding: 1px 7px;
+  }
+  .cred-exp { font-size: 11.5px; color: var(--text-dim); margin-left: auto; }
+  .cred-exp.warn { color: var(--yellow); }
+  .cred-exp.expired { color: var(--red); }
+  .cred-fields { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .cred-chip {
+    font-size: 11.5px; color: var(--text-dim);
+    background: var(--bg-3); border: 1px solid var(--border);
+    border-radius: 6px; padding: 3px 8px;
+    font-family: ui-monospace, monospace;
+  }
+  .cred-actions { margin-top: 10px; display: flex; gap: 7px; }
+  .cred-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12px; padding: 5px 11px; border-radius: 7px; cursor: pointer;
+    background: var(--bg-3); border: 1px solid var(--border); color: var(--text-dim);
+    transition: all 0.15s;
+  }
+  .cred-btn:hover { background: var(--bg-hover); color: #fff; }
+  .cred-btn.reveal { background: var(--accent-soft); border-color: rgba(99,102,241,0.4); color: #c7cbff; }
+  .cred-btn.danger:hover { background: rgba(248,113,113,0.15); color: var(--red); border-color: rgba(248,113,113,0.4); }
+  .cred-btn svg { width: 13px; height: 13px; }
+  .cred-empty { font-size: 12.5px; color: var(--text-faint); text-align: center; padding: 14px 0; }
+
+  /* 揭示出的真实值（仅本机） */
+  .reveal-row {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 7px; padding: 7px 10px;
+    background: rgba(52,211,153,0.07);
+    border: 1px solid rgba(52,211,153,0.25);
+    border-radius: 8px;
+  }
+  .reveal-k { font-size: 11.5px; color: var(--text-dim); min-width: 64px; }
+  .reveal-v { font-size: 13.5px; color: #eafff4; font-family: ui-monospace, monospace; font-weight: 600; letter-spacing: 0.5px; word-break: break-all; flex: 1; }
+  .reveal-copy { cursor: pointer; color: var(--text-faint); flex-shrink: 0; }
+  .reveal-copy:hover { color: var(--green); }
+  .reveal-copy svg { width: 14px; height: 14px; }
+
+  /* 表单 */
+  .vault-field { margin-bottom: 11px; }
+  .vault-field label { display: block; font-size: 11.5px; color: var(--text-dim); margin-bottom: 5px; }
+  .vault-input, .vault-select {
+    width: 100%; background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 9px; color: var(--text); font-size: 13.5px;
+    padding: 9px 11px; outline: none; font-family: inherit;
+  }
+  .vault-input:focus, .vault-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .vault-row2 { display: flex; gap: 10px; }
+  .vault-row2 > * { flex: 1; }
+  .vault-primary {
+    width: 100%; margin-top: 4px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    background: var(--accent-grad); border: none; color: #fff;
+    font-size: 13.5px; font-weight: 600; padding: 11px; border-radius: 10px; cursor: pointer;
+    transition: filter 0.15s;
+  }
+  .vault-primary:hover { filter: brightness(1.1); }
+  .vault-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+  .vault-primary svg { width: 16px; height: 16px; }
+  .vault-tabs { display: flex; gap: 6px; padding: 0 20px; margin-top: 14px; }
+  .vault-tab {
+    font-size: 12.5px; padding: 7px 13px; border-radius: 8px 8px 0 0; cursor: pointer;
+    color: var(--text-faint); border: 1px solid transparent;
+  }
+  .vault-tab.active { color: #fff; background: var(--bg-2); border-color: var(--border); border-bottom-color: transparent; }
+  .vault-status { font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .vault-status.ok { color: var(--green); }
+  .vault-status.err { color: var(--red); }
+  .vault-divider { height: 1px; background: var(--border-soft); margin: 0 20px; }
 </style>
 </head>
 <body>
 
-<div id="drop-overlay">松开鼠标上传文件 📄</div>
+<div id="drop-overlay">
+  <div class="drop-card">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M12 3v13"/><path d="m7 8 5-5 5 5"/>
+    </svg>
+    松开鼠标上传文件
+  </div>
+</div>
 
 <header>
-  <div class="status-dot" id="dot"></div>
-  <h1>贾维斯</h1>
+  <div class="brand">
+    <span class="brand-logo">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2a3 3 0 0 0-3 3v1a3 3 0 0 0-3 3 3 3 0 0 0 0 6 3 3 0 0 0 3 3v1a3 3 0 0 0 6 0v-1a3 3 0 0 0 3-3 3 3 0 0 0 0-6 3 3 0 0 0-3-3V5a3 3 0 0 0-3-3Z"/><path d="M12 8v8M8.5 11h7"/>
+      </svg>
+    </span>
+    <div class="status-dot" id="dot"></div>
+    <h1>贾维斯</h1>
+  </div>
   <div class="actions">
-    <button class="btn-sm" onclick="showMemory()">记忆库</button>
-    <button class="btn-sm" onclick="resetSession()">重置会话</button>
+    <button class="btn-sm" onclick="showMemory()" title="查看记忆库">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg>
+      记忆库
+    </button>
+    <button class="btn-sm" onclick="openVault()" title="证件保险箱（加密本地存储）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/><circle cx="12" cy="16" r="1"/></svg>
+      保险箱
+    </button>
+    <button class="btn-sm" onclick="resetSession()" title="重置当前会话">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+      重置会话
+    </button>
   </div>
 </header>
 
@@ -304,16 +560,107 @@
 
 <footer>
   <div id="upload-bar"><div id="upload-progress"></div></div>
-  <div class="input-row">
-    <button id="upload-btn" title="上传文件（或直接拖拽到页面）" onclick="triggerUpload()">📎</button>
+  <div class="input-shell">
+    <button id="upload-btn" class="icon-btn" title="上传文件（或直接拖拽到页面）" onclick="triggerUpload()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+    </button>
     <input type="file" id="file-input" style="display:none"
       accept=".pdf,.docx,.doc,.xlsx,.xls,.xlsm,.pptx,.ppt,.csv,.txt,.md,.json,.yaml,.yml,.jpg,.jpeg,.png,.gif,.webp,.bmp"
       onchange="handleFileSelect(this.files[0])">
     <textarea id="input" placeholder="和贾维斯说话，或拖拽文件到页面…" rows="1"></textarea>
-    <button id="send-btn" onclick="sendMessage()">↑</button>
+    <button id="send-btn" onclick="sendMessage()" title="发送">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+    </button>
   </div>
-  <p class="hint">Enter 发送 · Shift+Enter 换行 · 📎 或拖拽上传文件</p>
+  <p class="hint"><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · 附件按钮或拖拽上传文件</p>
 </footer>
+
+<!-- 证件保险箱模态 -->
+<div id="vault-overlay" onclick="if(event.target===this)closeVault()">
+  <div class="vault-modal">
+    <div class="vault-head">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/><circle cx="12" cy="16" r="1"/></svg>
+      <h2>证件保险箱</h2>
+      <button class="btn-sm close" onclick="closeVault()">关闭</button>
+    </div>
+    <div class="vault-note">所有信息在本机 AES 加密存储；完整号码只显示在此处，绝不发送给云端 AI。识别证件用本地 OCR，照片不上传。</div>
+
+    <div class="vault-section">
+      <h3>已保存</h3>
+      <div id="cred-list"><div class="cred-empty">加载中…</div></div>
+    </div>
+
+    <div class="vault-divider"></div>
+
+    <div class="vault-tabs">
+      <div class="vault-tab active" id="tab-ocr" onclick="switchTab('ocr')">上传照片识别</div>
+      <div class="vault-tab" id="tab-manual" onclick="switchTab('manual')">手动录入</div>
+    </div>
+
+    <!-- OCR 上传 -->
+    <div class="vault-section" id="pane-ocr">
+      <div class="vault-field"><label>类型</label>
+        <select class="vault-select" id="ocr-type">
+          <option value="auto">自动识别</option>
+          <option value="bank_card">银行卡</option>
+          <option value="id_card">身份证</option>
+          <option value="passport">护照</option>
+          <option value="driver_license">驾驶证</option>
+          <option value="other">其它</option>
+        </select>
+      </div>
+      <input type="file" id="cred-file" style="display:none" multiple accept=".jpg,.jpeg,.png,.webp,.bmp" onchange="scanCredential()">
+      <button class="vault-primary" onclick="document.getElementById('cred-file').click()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M12 3v13"/><path d="m7 8 5-5 5 5"/></svg>
+        选择证件照片（可多选正反面，本地识别）
+      </button>
+      <div class="vault-status" id="ocr-status"></div>
+
+      <!-- 识别后确认表单（本机预填，可改；CVV 手填）-->
+      <div id="ocr-confirm" style="display:none;margin-top:14px;border-top:1px solid var(--border-soft);padding-top:14px">
+        <h3 style="margin-bottom:10px">核对并补全</h3>
+        <div class="vault-field"><label>代号</label><input class="vault-input" id="oc-alias" placeholder="如 招行卡"></div>
+        <div id="oc-fields"></div>
+        <div class="vault-field"><label>有效期 (YYYY-MM-DD 或 长期，可改)</label><input class="vault-input" id="oc-expiry" placeholder="2030-01-01"></div>
+        <details id="oc-raw-wrap" style="margin-bottom:11px">
+          <summary style="font-size:11.5px;color:var(--text-dim);cursor:pointer">查看 OCR 原文（识别不准时照此手填）</summary>
+          <div id="oc-raw" style="margin-top:7px;font-size:11.5px;line-height:1.7;color:var(--text-dim);font-family:ui-monospace,monospace;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 11px;max-height:160px;overflow:auto;white-space:pre-wrap"></div>
+        </details>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-dim);margin-bottom:11px;cursor:pointer">
+          <input type="checkbox" id="oc-keep" checked style="width:15px;height:15px;accent-color:var(--accent)">
+          同时把证件照片加密保存到本地（仅本机可查看）
+        </label>
+        <button class="vault-primary" onclick="confirmSaveCredential()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          确认并加密保存
+        </button>
+      </div>
+    </div>
+
+    <!-- 手动录入 -->
+    <div class="vault-section" id="pane-manual" style="display:none">
+      <div class="vault-row2">
+        <div class="vault-field"><label>代号</label><input class="vault-input" id="m-alias" placeholder="如 招行卡"></div>
+        <div class="vault-field"><label>类型</label>
+          <select class="vault-select" id="m-type" onchange="renderManualFields()">
+            <option value="bank_card">银行卡</option>
+            <option value="id_card">身份证</option>
+            <option value="passport">护照</option>
+            <option value="driver_license">驾驶证</option>
+            <option value="other">其它</option>
+          </select>
+        </div>
+      </div>
+      <div id="m-fields"></div>
+      <div class="vault-field"><label>有效期 (YYYY-MM-DD，可选)</label><input class="vault-input" id="m-expiry" placeholder="2030-01-01"></div>
+      <button class="vault-primary" onclick="manualSave()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+        加密保存
+      </button>
+      <div class="vault-status" id="m-status"></div>
+    </div>
+  </div>
+</div>
 
 <script>
 const messagesEl  = document.getElementById("messages");
@@ -327,10 +674,20 @@ const dropOverlay = document.getElementById("drop-overlay");
 let ws = null;
 let currentBubble = null;
 
+// SVG 图标（供 JS 动态生成的卡片使用）
+const ICON = {
+  wrench: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.6 5l-6.4 6.4a2 2 0 0 0 2.8 2.8l6.4-6.4a4 4 0 0 0 5-5.6l-2.5 2.5-2.1-2.1 2.4-2.6Z"/></svg>',
+  gear:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 15H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 9 4.6V3a2 2 0 1 1 4 0v.1A1.6 1.6 0 0 0 15 4.6l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1Z"/></svg>',
+  check:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+  bolt:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg>',
+  down:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>',
+};
+
 // ── WebSocket ──────────────────────────────────────────────────────────────
 
 function connect() {
-  ws = new WebSocket(`ws://${location.host}/ws/chat`);
+  const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(`${wsProto}//${location.host}/ws/chat`);
   ws.onopen  = () => { dot.className = "status-dot online"; addSystemMessage("已连接到贾维斯"); };
   ws.onclose = () => { dot.className = "status-dot"; addSystemMessage("连接断开，3秒后重连…"); setTimeout(connect, 3000); };
   ws.onerror = () => addSystemMessage("连接出错");
@@ -347,7 +704,7 @@ function connect() {
         if (msg.text.includes("⚙️")) {
           const span = document.createElement("span");
           span.className = "tool-indicator";
-          span.textContent = msg.text.replace(/\n/g, "");
+          span.innerHTML = ICON.gear + escHtml(msg.text.replace(/⚙️/g, "").replace(/\n/g, "").trim());
           currentBubble.appendChild(span);
         } else {
           currentBubble.appendChild(document.createTextNode(msg.text));
@@ -372,8 +729,314 @@ function connect() {
 
     } else if (msg.type === "code_review") {
       addCodeReviewCard(msg.name, msg.code, msg.message, msg.validation);
+
+    } else if (msg.type === "file_download") {
+      addFileDownloadCard(msg.filename, msg.url, msg.size);
+
+    } else if (msg.type === "credential_reveal") {
+      addCredentialRevealCard(msg.alias, msg.type_label, msg.values);
     }
   };
+}
+
+// ── 证件字段中文名 ───────────────────────────────────────────────────────────
+const FIELD_LABELS = {
+  card_number: "卡号", cvv: "CVV", cvc: "CVC", expiry: "有效期", bank: "发卡行",
+  id_number: "身份证号", name: "姓名", birth_date: "出生日期", address: "住址",
+  issue_date: "签发日期", passport_number: "护照号", license_number: "证号",
+  account_number: "账号", pin: "密码", note: "备注",
+  authority: "签发机关", vehicle_class: "准驾车型",
+};
+function fieldLabel(k) { return FIELD_LABELS[k] || k; }
+
+// ── 聊天里安全显示真实值（仅本机推送，不经云端）───────────────────────────────
+const COPY_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+
+function addCredentialRevealCard(alias, typeLabel, values) {
+  const wrap = document.createElement("div");
+  wrap.className = "message assistant";
+  let rows = "";
+  for (const [k, v] of Object.entries(values)) {
+    if (k === "_raw_lines") continue;
+    rows += `<div class="reveal-row">
+      <span class="reveal-k">${escHtml(fieldLabel(k))}</span>
+      <span class="reveal-v">${escHtml(String(v))}</span>
+      <span class="reveal-copy" title="复制" onclick="copyText(this)">${COPY_SVG}</span>
+    </div>`;
+  }
+  wrap.innerHTML = `
+    <div class="avatar">J</div>
+    <div style="flex:1">
+      <div style="font-size:12.5px;color:var(--text-dim);margin-bottom:2px">🔒 ${escHtml(alias)}${typeLabel ? "（"+escHtml(typeLabel)+"）" : ""} · 仅本机显示</div>
+      ${rows}
+    </div>`;
+  messagesEl.appendChild(wrap);
+  scrollToBottom();
+}
+
+function copyText(el) {
+  // 从同一行的 .reveal-v 读取真实值，避免把值塞进 HTML 属性（正是之前的 bug）
+  const row = el.closest(".reveal-row");
+  const text = row ? row.querySelector(".reveal-v").textContent : "";
+  navigator.clipboard.writeText(text).then(() => {
+    el.style.color = "var(--green)";
+    setTimeout(() => { el.style.color = ""; }, 1200);
+  });
+}
+
+// ── 保险箱模态 ───────────────────────────────────────────────────────────────
+function openVault() {
+  document.getElementById("vault-overlay").classList.add("active");
+  loadCredentials();
+  renderManualFields();
+}
+function closeVault() {
+  document.getElementById("vault-overlay").classList.remove("active");
+}
+function switchTab(which) {
+  document.getElementById("tab-ocr").classList.toggle("active", which === "ocr");
+  document.getElementById("tab-manual").classList.toggle("active", which === "manual");
+  document.getElementById("pane-ocr").style.display = which === "ocr" ? "" : "none";
+  document.getElementById("pane-manual").style.display = which === "manual" ? "" : "none";
+}
+
+const EXPIRED_DAY = 86400000;
+async function loadCredentials() {
+  const box = document.getElementById("cred-list");
+  box.innerHTML = `<div class="cred-empty">加载中…</div>`;
+  try {
+    const resp = await fetch("/api/credentials");
+    const items = await resp.json();
+    if (!items.length) { box.innerHTML = `<div class="cred-empty">还没有保存任何证件</div>`; return; }
+    box.innerHTML = items.map(renderCredCard).join("");
+  } catch (e) {
+    box.innerHTML = `<div class="cred-empty">加载失败：${escHtml(e.message)}</div>`;
+  }
+}
+
+function renderCredCard(c) {
+  let expHtml = "";
+  if (c.expires_at) {
+    const t = Date.parse(c.expires_at);
+    if (isNaN(t)) {
+      expHtml = `<span class="cred-exp">${escHtml(c.expires_at)}</span>`;  // 如"长期"
+    } else {
+      const days = Math.round((t - Date.now()) / EXPIRED_DAY);
+      const cls = days < 0 ? "expired" : (days < 60 ? "warn" : "");
+      const txt = days < 0 ? `已过期 ${-days} 天` : `${c.expires_at} 到期`;
+      expHtml = `<span class="cred-exp ${cls}">${txt}</span>`;
+    }
+  }
+  const chips = Object.entries(c.preview || {})
+    .filter(([k]) => k !== "_raw_lines")
+    .map(([k, v]) => `<span class="cred-chip">${escHtml(fieldLabel(k))}: ${escHtml(String(v))}</span>`).join("");
+  const imgBtn = (c.image_count > 0) ? `
+      <button class="cred-btn" onclick="viewImages(this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+        照片 ${c.image_count}
+      </button>` : "";
+  return `<div class="cred-card" data-alias="${escAttr(c.alias)}">
+    <div class="cred-top">
+      <span class="cred-alias">${escHtml(c.alias)}</span>
+      <span class="cred-type">${escHtml(c.type_label || c.type)}</span>
+      ${expHtml}
+    </div>
+    <div class="cred-fields">${chips || '<span class="cred-chip">无字段</span>'}</div>
+    <div class="cred-actions">
+      <button class="cred-btn reveal" onclick="revealFromPanel(this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+        显示完整
+      </button>
+      ${imgBtn}
+      <button class="cred-btn danger" onclick="deleteCredential(this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+        删除
+      </button>
+    </div>
+    <div class="reveal-target"></div>
+    <div class="img-target"></div>
+  </div>`;
+}
+
+async function revealFromPanel(btn) {
+  const card = btn.closest(".cred-card");
+  const alias = card.dataset.alias;
+  const target = card.querySelector(".reveal-target");
+  if (target.dataset.shown === "1") { target.innerHTML = ""; target.dataset.shown = "0"; return; }
+  try {
+    const resp = await fetch(`/api/credentials/${encodeURIComponent(alias)}/reveal`, {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({})
+    });
+    const data = await resp.json();
+    const vals = data.values || {};
+    let rows = "";
+    for (const [k, v] of Object.entries(vals)) {
+      if (k === "_raw_lines") continue;
+      rows += `<div class="reveal-row">
+        <span class="reveal-k">${escHtml(fieldLabel(k))}</span>
+        <span class="reveal-v">${escHtml(String(v))}</span>
+        <span class="reveal-copy" title="复制" onclick="copyText(this)">${COPY_SVG}</span>
+      </div>`;
+    }
+    target.innerHTML = rows || `<div class="cred-empty">无可显示字段</div>`;
+    target.dataset.shown = "1";
+  } catch (e) {
+    target.innerHTML = `<div class="cred-empty">读取失败：${escHtml(e.message)}</div>`;
+  }
+}
+
+async function viewImages(btn) {
+  const card = btn.closest(".cred-card");
+  const alias = card.dataset.alias;
+  const target = card.querySelector(".img-target");
+  if (target.dataset.shown === "1") { target.innerHTML = ""; target.dataset.shown = "0"; return; }
+  target.innerHTML = `<div class="cred-empty">加载中…</div>`;
+  try {
+    const resp = await fetch(`/api/credentials/${encodeURIComponent(alias)}/images`);
+    const imgs = await resp.json();
+    if (!imgs.length) { target.innerHTML = `<div class="cred-empty">没有照片</div>`; target.dataset.shown = "1"; return; }
+    target.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:9px">` + imgs.map(im => {
+      const url = `/api/credentials/${encodeURIComponent(alias)}/image/${im.id}`;
+      return `<div style="position:relative">
+        <img src="${url}" style="height:88px;border-radius:8px;border:1px solid var(--border);cursor:zoom-in" onclick="window.open('${url}','_blank')">
+        <span onclick="deleteCredImage(this)" data-id="${im.id}" title="删除这张照片" style="position:absolute;top:-6px;right:-6px;background:var(--red);color:#fff;width:18px;height:18px;border-radius:50%;font-size:13px;line-height:18px;text-align:center;cursor:pointer">×</span>
+      </div>`;
+    }).join("") + `</div>`;
+    target.dataset.shown = "1";
+  } catch (e) { target.innerHTML = `<div class="cred-empty">加载失败：${escHtml(e.message)}</div>`; }
+}
+
+async function deleteCredImage(el) {
+  const alias = el.closest(".cred-card").dataset.alias;
+  const id = el.dataset.id;
+  if (!confirm("删除这张照片？")) return;
+  await fetch(`/api/credentials/${encodeURIComponent(alias)}/image/${id}`, { method: "DELETE" });
+  loadCredentials();
+}
+
+async function deleteCredential(btn) {
+  const alias = btn.closest(".cred-card").dataset.alias;
+  if (!confirm(`确定删除「${alias}」？此操作不可恢复（含已存照片）。`)) return;
+  await fetch(`/api/credentials/${encodeURIComponent(alias)}`, { method: "DELETE" });
+  loadCredentials();
+}
+
+let _scanType = "other";
+let _scanToken = null;
+
+async function scanCredential() {
+  const fileInput = document.getElementById("cred-file");
+  const files = Array.from(fileInput.files || []);
+  const status = document.getElementById("ocr-status");
+  const confirm = document.getElementById("ocr-confirm");
+  if (!files.length) return;
+  confirm.style.display = "none";
+  status.className = "vault-status";
+  status.textContent = `本地识别中…（${files.length} 张，照片不会上传）`;
+  const fd = new FormData();
+  files.forEach(f => fd.append("files", f));
+  fd.append("cred_type", document.getElementById("ocr-type").value);
+  try {
+    const resp = await fetch("/api/credentials/scan", { method: "POST", body: fd });
+    const data = await resp.json();
+    fileInput.value = "";
+    if (!data.ok) { status.className = "vault-status err"; status.textContent = data.message || "识别失败"; return; }
+    _scanType = data.cred_type || "other";
+    _scanToken = data.scan_token || null;
+    const fields = data.fields || {};
+    const detected = Object.keys(fields).filter(k => k !== "expiry").map(fieldLabel);
+    const cnt = data.image_count || files.length;
+    status.className = "vault-status ok";
+    status.textContent = `已识别 ${cnt} 张（${data.type_label}）：${detected.length ? detected.join("、") : "未提取到字段，可手动填写"}。请核对后保存。`;
+
+    // 复核表单：列出该类型的【全部】字段（OCR 填好的预填，没认到的留空也显示），逐项核对
+    const tmpl = (MANUAL_FIELDS[_scanType] || MANUAL_FIELDS.other).map(([k]) => k).filter(k => k !== "expiry");
+    const extra = Object.keys(fields).filter(k => k !== "expiry" && !tmpl.includes(k));  // OCR 多识别的字段也带上
+    let keys = tmpl.concat(extra);
+    if (_scanType === "bank_card" && !keys.includes("cvv")) keys.push("cvv");
+
+    document.getElementById("oc-fields").innerHTML = keys.map(k => {
+      const val = (k === "cvv") ? "" : (fields[k] || "");
+      const ph = (k === "cvv") ? "看卡背手动填 3 位" : "OCR 未识别，可手填";
+      return `<div class="vault-field"><label>${fieldLabel(k)}</label><input class="vault-input" data-field="${k}" value="${escAttr(String(val))}" placeholder="${ph}"></div>`;
+    }).join("");
+    document.getElementById("oc-expiry").value = data.expiry || fields.expiry || "";
+    const raw = data.raw_lines || [];
+    document.getElementById("oc-raw").textContent = raw.length
+      ? raw.join("\n")
+      : "（OCR 未读到任何文字——多半是照片太小/太糊/反光，建议在光线均匀处重拍更清晰、更正的图）";
+    confirm.style.display = "";
+  } catch (e) {
+    fileInput.value = "";
+    status.className = "vault-status err"; status.textContent = "失败：" + e.message;
+  }
+}
+
+function escAttr(s) { return s.replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;"); }
+
+async function confirmSaveCredential() {
+  const alias = document.getElementById("oc-alias").value.trim();
+  const status = document.getElementById("ocr-status");
+  if (!alias) { status.className = "vault-status err"; status.textContent = "请填代号再保存"; return; }
+  const fields = {};
+  document.querySelectorAll("#oc-fields .vault-input").forEach(inp => {
+    if (inp.value.trim()) fields[inp.dataset.field] = inp.value.trim();
+  });
+  const expiry = document.getElementById("oc-expiry").value.trim();
+  try {
+    const resp = await fetch("/api/credentials/manual", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        alias, cred_type: _scanType, fields, expires_at: expiry || null,
+        scan_token: _scanToken, keep_images: document.getElementById("oc-keep").checked
+      })
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      status.className = "vault-status ok"; status.textContent = data.message;
+      document.getElementById("ocr-confirm").style.display = "none";
+      document.getElementById("oc-alias").value = "";
+      _scanToken = null;
+      loadCredentials();
+    } else { status.className = "vault-status err"; status.textContent = data.message || "保存失败"; }
+  } catch (e) { status.className = "vault-status err"; status.textContent = "失败：" + e.message; }
+}
+
+const MANUAL_FIELDS = {
+  bank_card:      [["card_number","卡号"],["cvv","CVV"],["bank","发卡行"],["name","持卡人"]],
+  id_card:        [["id_number","身份证号"],["name","姓名"],["birth_date","出生日期"],["address","住址"],["issue_date","签发日期"],["authority","签发机关"]],
+  passport:       [["passport_number","护照号"],["name","姓名"],["birth_date","出生日期"],["issue_date","签发日期"]],
+  driver_license: [["license_number","证号"],["name","姓名"],["vehicle_class","准驾车型"]],
+  other:          [["number","号码"],["name","名称"]],
+};
+function renderManualFields() {
+  const type = document.getElementById("m-type").value;
+  const fields = (MANUAL_FIELDS[type] || MANUAL_FIELDS.other).filter(([k]) => k !== "expiry");
+  document.getElementById("m-fields").innerHTML = fields.map(([k, label]) =>
+    `<div class="vault-field"><label>${label}</label><input class="vault-input" data-field="${k}" placeholder="${label}"></div>`
+  ).join("");
+}
+async function manualSave() {
+  const alias = document.getElementById("m-alias").value.trim();
+  const status = document.getElementById("m-status");
+  if (!alias) { status.className = "vault-status err"; status.textContent = "请填代号"; return; }
+  const fields = {};
+  document.querySelectorAll("#m-fields .vault-input").forEach(inp => {
+    if (inp.value.trim()) fields[inp.dataset.field] = inp.value.trim();
+  });
+  const expiry = document.getElementById("m-expiry").value.trim();
+  try {
+    const resp = await fetch("/api/credentials/manual", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ alias, cred_type: document.getElementById("m-type").value, fields, expires_at: expiry || null })
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      status.className = "vault-status ok"; status.textContent = data.message;
+      document.getElementById("m-alias").value = ""; document.getElementById("m-expiry").value = "";
+      renderManualFields(); loadCredentials();
+    } else { status.className = "vault-status err"; status.textContent = data.message || "保存失败"; }
+  } catch (e) { status.className = "vault-status err"; status.textContent = "失败：" + e.message; }
 }
 
 // ── 文件上传 ───────────────────────────────────────────────────────────────
@@ -385,15 +1048,12 @@ function triggerUpload() {
 function handleFileSelect(file) {
   if (!file) return;
   uploadFile(file);
-  // 重置 input，允许重复上传同一文件
   document.getElementById("file-input").value = "";
 }
 
 async function uploadFile(file) {
-  // 显示文件气泡（上传中状态）
   addFileBubble(file.name, file.size, "上传中…");
 
-  // 进度条
   uploadBar.classList.add("active");
   uploadProg.style.width = "30%";
 
@@ -409,7 +1069,6 @@ async function uploadFile(file) {
     uploadProg.style.width = "100%";
     setTimeout(() => { uploadBar.classList.remove("active"); uploadProg.style.width = "0%"; }, 400);
 
-    // 自动发送消息，带文件路径
     const prompt = `请读取并分析这个文件，告诉我里面的主要内容：${data.path}`;
     addUserMessage(`📄 ${file.name}`);
     ws.send(JSON.stringify({ message: prompt }));
@@ -515,7 +1174,7 @@ function sendMessage() {
   addUserMessage(text);
   ws.send(JSON.stringify({ message: text }));
   inputEl.value = "";
-  inputEl.style.height = "44px";
+  inputEl.style.height = "38px";
 }
 
 function resetSession() { ws.send(JSON.stringify({ message: "/reset" })); }
@@ -528,7 +1187,6 @@ function addCodeReviewCard(name, code, message, validation) {
   const hasErrors   = v.errors   && v.errors.length > 0;
   const hasWarnings = v.warnings && v.warnings.length > 0;
 
-  // 验证结果横幅
   let validationHtml = "";
   if (hasErrors) {
     const items = v.errors.map(e => `<li>${escHtml(e)}</li>`).join("");
@@ -549,12 +1207,12 @@ function addCodeReviewCard(name, code, message, validation) {
   card.dataset.toolName = name;
   card.innerHTML = `
     <div class="code-review-header">
-      <span class="code-review-title">🔧 skills/${name}/tool.py</span>
+      <span class="code-review-title">${ICON.wrench} skills/${name}/tool.py</span>
       <div class="code-review-actions">
         <button class="btn-activate" id="activate-${name}"
           onclick="activateTool('${name}')"
           ${hasErrors ? "disabled title='有阻断级错误，无法激活'" : ""}>
-          ${hasErrors ? "❌ 无法激活" : "激活工具"}
+          ${hasErrors ? "无法激活" : ICON.bolt + "激活工具"}
         </button>
         <button class="btn-dismiss" onclick="this.closest('.code-review-card').remove()">忽略</button>
       </div>
@@ -571,6 +1229,26 @@ function addCodeReviewCard(name, code, message, validation) {
   scrollToBottom();
 }
 
+function addFileDownloadCard(filename, url, size) {
+  const wrap = document.createElement("div");
+  wrap.className = "message assistant";
+  wrap.innerHTML = `
+    <div class="avatar">J</div>
+    <a href="${url}" download="${escHtml(filename)}" style="text-decoration:none">
+      <div class="file-bubble" style="cursor:pointer"
+           onmouseover="this.style.background='rgba(99,102,241,0.16)'" onmouseout="this.style.background=''">
+        <div class="file-icon">${fileIcon(filename)}</div>
+        <div class="file-info">
+          <div class="file-name">${escHtml(filename)}</div>
+          <div class="file-meta">${formatSize(size)} · 点击下载</div>
+        </div>
+        <span style="margin-left:auto;color:var(--accent-2);display:flex">${ICON.down}</span>
+      </div>
+    </a>`;
+  messagesEl.appendChild(wrap);
+  scrollToBottom();
+}
+
 async function activateTool(name) {
   const btn = document.getElementById(`activate-${name}`);
   if (!btn) return;
@@ -581,8 +1259,9 @@ async function activateTool(name) {
     const resp = await fetch(`/api/tools/${name}/activate`, { method: "POST" });
     const data = await resp.json();
     if (data.ok) {
-      btn.textContent = "✅ 已激活";
-      btn.style.background = "#1a3a1f";
+      btn.innerHTML = ICON.check + "已激活";
+      btn.style.background = "rgba(52,211,153,0.18)";
+      btn.style.color = "var(--green)";
       addSystemMessage(`工具 ${name} 已激活，现在可以直接使用了。`);
     } else {
       btn.disabled = false;
@@ -601,11 +1280,20 @@ inputEl.addEventListener("keydown", (e) => {
 });
 
 inputEl.addEventListener("input", () => {
-  inputEl.style.height = "44px";
+  inputEl.style.height = "38px";
   inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
 });
 
 connect();
+
+// ── PWA: 注册 Service Worker（仅在 HTTPS / localhost 下生效）──────────────────
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch((e) =>
+      console.warn("Service Worker 注册失败：", e)
+    );
+  });
+}
 </script>
 </body>
 </html>

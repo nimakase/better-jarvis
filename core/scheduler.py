@@ -35,6 +35,7 @@ from apscheduler.triggers.cron import CronTrigger
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
+from core.safety import safe_name, is_safe_name
 
 logger = logging.getLogger("jarvis.scheduler")
 
@@ -99,11 +100,14 @@ async def _deliver(name: str, content: str, delivery: dict):
 # ── 任务管理 ──────────────────────────────────────────────────────────────────
 
 def _schedule_dir(name: str) -> Path:
-    return SCHEDULES_DIR / name
+    return SCHEDULES_DIR / safe_name(name)   # safe_name 防路径穿越，非法名抛 ValueError
 
 
 def _load_config(name: str) -> Optional[dict]:
-    path = _schedule_dir(name) / "config.json"
+    try:
+        path = _schedule_dir(name) / "config.json"
+    except ValueError:
+        return None
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
@@ -154,6 +158,8 @@ def create_schedule(
     receive_id_type: str = "open_id",
 ) -> tuple[bool, str]:
     """创建并启动一个新定时任务。"""
+    if not is_safe_name(name):
+        return False, f"任务名非法：{name!r}（只允许字母、数字、下划线、连字符，长度 1-64）"
     # 验证 cron 表达式
     try:
         CronTrigger.from_crontab(cron, timezone="Asia/Shanghai")
@@ -186,7 +192,10 @@ def create_schedule(
 def delete_schedule(name: str) -> tuple[bool, str]:
     """删除定时任务。"""
     import shutil
-    d = _schedule_dir(name)
+    try:
+        d = _schedule_dir(name)
+    except ValueError as e:
+        return False, str(e)
     if not d.exists():
         return False, f"任务 {name} 不存在"
 

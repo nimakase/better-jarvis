@@ -20,6 +20,7 @@ import httpx
 import json
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import quote
 
 import sys
 from pathlib import Path
@@ -77,7 +78,7 @@ async def get_calendar(start_date: str, end_date: str, calendar_id: str = "prima
 
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                f"{config.FEISHU_BASE_URL}/calendar/v4/calendars/{calendar_id}/events",
+                f"{config.FEISHU_BASE_URL}/calendar/v4/calendars/{quote(calendar_id, safe='')}/events",
                 headers=await _headers(),
                 params={
                     "start_time": str(start_ts),
@@ -127,7 +128,7 @@ async def create_calendar_event(
         }
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                f"{config.FEISHU_BASE_URL}/calendar/v4/calendars/{calendar_id}/events",
+                f"{config.FEISHU_BASE_URL}/calendar/v4/calendars/{quote(calendar_id, safe='')}/events",
                 headers=await _headers(),
                 json=body,
             )
