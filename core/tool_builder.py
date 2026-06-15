@@ -327,7 +327,11 @@ def load_all_active_skills():
         meta_path = skill_dir / "meta.json"
         if not meta_path.exists():
             continue
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"[tool_builder] 跳过技能 {skill_dir.name}：meta.json 解析失败（{e}）")
+            continue
         if meta.get("status") == "active":
             ok, msg = activate_skill(skill_dir.name)
             if not ok:
@@ -745,3 +749,7 @@ META_HANDLERS = {
 def register_meta_tools():
     for defn in META_TOOL_DEFS:
         register_tool(defn, META_HANDLERS[defn["name"]])
+
+
+# 模块导入即注册元工具（统一为"导入即自注册"，main.py 不再显式调用）
+register_meta_tools()

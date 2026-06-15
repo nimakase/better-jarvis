@@ -91,76 +91,6 @@ def _to_openai_tool(defn: dict) -> dict:
     }
 
 
-# ── 内置工具：记忆读写 ────────────────────────────────────────────────────────
-
-def _builtin_query_memory(key: str) -> str:
-    val = mem.read(key)
-    if val is None:
-        return f"记忆库中没有找到 key='{key}' 的记录。"
-    return json.dumps(val, ensure_ascii=False)
-
-
-def _builtin_write_memory(key: str, value: str, expires_days: int = 0, source: str = "", sensitive: bool = False) -> str:
-    from datetime import datetime, timezone, timedelta
-    exp = None
-    if expires_days > 0:
-        exp = datetime.now(timezone.utc) + timedelta(days=expires_days)
-    try:
-        parsed = json.loads(value)
-    except Exception:
-        parsed = value
-    mem.write(key, parsed, source=source, expires_at=exp, sensitive=sensitive)
-    return f"已记录：{key} = {value}" + (f"（{expires_days}天后过期）" if expires_days else "")
-
-
-def _builtin_list_memory() -> str:
-    items = mem.list_all()
-    if not items:
-        return "记忆库为空。"
-    return json.dumps(items, ensure_ascii=False, indent=2)
-
-
-BUILTIN_TOOL_DEFS = [
-    {
-        "name": "query_memory",
-        "description": "查询用户记忆库中的某条信息。用于获取用户的偏好、状态、历史决定等已存储的信息。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "key": {"type": "string", "description": "记忆条目的键，如 'insurance_policies'、'risk_preference'"}
-            },
-            "required": ["key"]
-        }
-    },
-    {
-        "name": "write_memory",
-        "description": "将用户信息写入记忆库，用于保存用户偏好、状态、决定等需要跨会话保留的信息。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "key":          {"type": "string",  "description": "记忆键"},
-                "value":        {"type": "string",  "description": "要存储的内容（JSON 字符串或纯文本）"},
-                "expires_days": {"type": "integer", "description": "有效天数，0 表示永久"},
-                "source":       {"type": "string",  "description": "信息来源描述"},
-                "sensitive":    {"type": "boolean", "description": "是否加密存储（含个人敏感信息时为 true）"}
-            },
-            "required": ["key", "value"]
-        }
-    },
-    {
-        "name": "list_memory",
-        "description": "列出记忆库中所有条目，供用户查看或审计。",
-        "input_schema": {"type": "object", "properties": {}}
-    },
-]
-
-BUILTIN_HANDLERS = {
-    "query_memory": lambda args: _builtin_query_memory(**args),
-    "write_memory":  lambda args: _builtin_write_memory(**args),
-    "list_memory":   lambda args: _builtin_list_memory(),
-}
-
-
 # ── 对话历史压缩 ──────────────────────────────────────────────────────────────
 
 async def _compress_history(client: AsyncOpenAI, messages: list) -> list:
@@ -213,13 +143,6 @@ def _normalize_result(raw) -> ToolResult:
 
 
 async def _execute_tool(name: str, inputs: dict) -> ToolResult:
-    if name in BUILTIN_HANDLERS:
-        try:
-            raw = await _safe_call(BUILTIN_HANDLERS[name], inputs)
-        except Exception as e:
-            raw = f"工具执行出错：{e}"
-        return _normalize_result(raw)
-
     handler = registry.get_handler(name)
     if handler is not None:
         try:
@@ -254,7 +177,7 @@ class JarvisController:
 
     def get_all_tools(self) -> list[dict]:
         """返回 OpenAI function calling 格式的工具列表。"""
-        all_defs = BUILTIN_TOOL_DEFS + registry.definitions()
+        all_defs = registry.definitions()
         return [_to_openai_tool(d) for d in all_defs]
 
     async def chat(self, user_message: str) -> AsyncGenerator[str, None]:

@@ -16,7 +16,7 @@ from fastapi import FastAPI
 import config
 from core import registry
 from core.context import AppContext
-from core.tool_builder import register_meta_tools, load_all_active_skills
+from core.tool_builder import load_all_active_skills
 from core.scheduler import get_scheduler, load_all_active_schedules
 
 # Web 路由模块
@@ -26,8 +26,7 @@ from web import skills as web_skills
 from web import memory as web_memory
 from web import files as web_files
 
-# 注册工具：先内置元工具，再自动发现 connectors/ 下所有连接器
-register_meta_tools()
+# 注册工具：导入 tool_builder 即注册元工具；自动发现 connectors/ 下所有连接器（含内置记忆工具）
 registry.discover_connectors()
 
 # 启动时加载所有已激活的自建技能
