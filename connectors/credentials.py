@@ -10,7 +10,7 @@
 import json
 from pathlib import Path
 
-from core.controller import register_tool
+from core.registry import tool
 from connectors import vault
 from connectors import cred_ocr
 from core.results import ToolResult, Action
@@ -72,6 +72,15 @@ def ingest_image(image_path: str, alias: str, cred_type: str = "auto", note: str
 
 # ── 工具：列出证件（脱敏，可给模型）───────────────────────────────────────────
 
+@tool(
+    "list_credentials",
+    (
+        "列出证件保险箱里所有已保存证件的脱敏摘要（代号、类型、有效期、尾号预览）。"
+        "当用户问『我有哪些证件 / 银行卡』『XX 什么时候到期』『保险箱里有什么』时使用。"
+        "返回内容已脱敏，不含完整号码。"
+    ),
+    {"type": "object", "properties": {}},
+)
 async def _t_list_credentials() -> str:
     items = vault.list_summary()
     if not items:
@@ -87,6 +96,22 @@ async def _t_list_credentials() -> str:
 
 # ── 工具：揭示某证件字段（真实值走侧信道，不经模型）──────────────────────────
 
+@tool(
+    "reveal_credential",
+    (
+        "安全显示某个证件的完整信息。当用户要看完整卡号、CVV、身份证号、护照号等真实值时使用。"
+        "真实号码会直接显示在用户网页上，不会发给你；你只会收到脱敏确认。"
+        "用 alias（代号）定位证件；fields 指定只看哪些字段（如只问卡号就传 'card_number'）。"
+    ),
+    {
+        "type": "object",
+        "properties": {
+            "alias":  {"type": "string", "description": "证件代号，如 '招行卡'、'身份证'"},
+            "fields": {"type": "string", "description": "要显示的字段名，逗号分隔，如 'card_number' 或 'card_number,cvv'；留空=全部。常见字段：card_number/cvv/expiry/bank/id_number/name/birth_date/passport_number/address"},
+        },
+        "required": ["alias"],
+    },
+)
 async def _t_reveal_credential(alias: str, fields: str = "") -> str:
     """
     fields: 逗号分隔的字段名（如 "card_number,cvv"），留空=全部。
@@ -112,6 +137,22 @@ async def _t_reveal_credential(alias: str, fields: str = "") -> str:
 
 # ── 工具：手动补充/修改字段 ───────────────────────────────────────────────────
 
+@tool(
+    "update_credential",
+    (
+        "手动补充或修改某证件的一个字段（OCR 没识别全时用）。"
+        "注意：用户在对话里直接说出的值会经过云端模型，敏感号码建议改用网页保险箱里录入。"
+    ),
+    {
+        "type": "object",
+        "properties": {
+            "alias": {"type": "string", "description": "证件代号"},
+            "field": {"type": "string", "description": "字段名，如 expiry、bank、cvv"},
+            "value": {"type": "string", "description": "字段值"},
+        },
+        "required": ["alias", "field", "value"],
+    },
+)
 async def _t_update_credential(alias: str, field: str, value: str) -> str:
     if vault.get_meta(alias) is None:
         return f"没有代号为「{alias}」的证件。"
@@ -121,6 +162,15 @@ async def _t_update_credential(alias: str, field: str, value: str) -> str:
 
 # ── 工具：删除证件 ────────────────────────────────────────────────────────────
 
+@tool(
+    "delete_credential",
+    "从保险箱删除某个证件。用户说『删掉 XX 证件』时使用。",
+    {
+        "type": "object",
+        "properties": {"alias": {"type": "string", "description": "要删除的证件代号"}},
+        "required": ["alias"],
+    },
+)
 async def _t_delete_credential(alias: str) -> str:
     ok = vault.delete(alias)
     return f"已删除证件「{alias}」。" if ok else f"没有代号为「{alias}」的证件。"
@@ -128,6 +178,24 @@ async def _t_delete_credential(alias: str) -> str:
 
 # ── 工具：用本机已存图片路径识别保存 ──────────────────────────────────────────
 
+@tool(
+    "ingest_credential_image",
+    (
+        "对本机上一张证件照片做【本地】OCR 识别并加密保存到保险箱（不经云端）。"
+        "当用户给出证件图片路径并希望保存时使用。"
+        "image_path=图片完整路径，alias=用户给的代号，cred_type 可选 bank_card/id_card/passport/auto。"
+    ),
+    {
+        "type": "object",
+        "properties": {
+            "image_path": {"type": "string", "description": "证件图片完整路径"},
+            "alias":      {"type": "string", "description": "给这个证件起的代号"},
+            "cred_type":  {"type": "string", "description": "bank_card/id_card/passport/auto，默认 auto"},
+            "note":       {"type": "string", "description": "备注（可选）"},
+        },
+        "required": ["image_path", "alias"],
+    },
+)
 async def _t_ingest_credential_image(image_path: str, alias: str, cred_type: str = "auto", note: str = "") -> str:
     try:
         r = ingest_image(image_path, alias, cred_type, note)
@@ -138,92 +206,3 @@ async def _t_ingest_credential_image(image_path: str, alias: str, cred_type: str
     prev = "，".join(f"{k}:{v}" for k, v in r["preview"].items() if k != "_raw_lines")
     exp = f"，有效期至 {r['expires_at']}" if r.get("expires_at") else ""
     return f"{r['message']}类型：{r['type_label']}{exp}。识别到（脱敏）：{prev}"
-
-
-# ── 工具定义 ──────────────────────────────────────────────────────────────────
-
-CREDENTIAL_TOOL_DEFS = [
-    {
-        "name": "list_credentials",
-        "description": (
-            "列出证件保险箱里所有已保存证件的脱敏摘要（代号、类型、有效期、尾号预览）。"
-            "当用户问『我有哪些证件 / 银行卡』『XX 什么时候到期』『保险箱里有什么』时使用。"
-            "返回内容已脱敏，不含完整号码。"
-        ),
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "reveal_credential",
-        "description": (
-            "安全显示某个证件的完整信息。当用户要看完整卡号、CVV、身份证号、护照号等真实值时使用。"
-            "真实号码会直接显示在用户网页上，不会发给你；你只会收到脱敏确认。"
-            "用 alias（代号）定位证件；fields 指定只看哪些字段（如只问卡号就传 'card_number'）。"
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "alias":  {"type": "string", "description": "证件代号，如 '招行卡'、'身份证'"},
-                "fields": {"type": "string", "description": "要显示的字段名，逗号分隔，如 'card_number' 或 'card_number,cvv'；留空=全部。常见字段：card_number/cvv/expiry/bank/id_number/name/birth_date/passport_number/address"},
-            },
-            "required": ["alias"],
-        },
-    },
-    {
-        "name": "ingest_credential_image",
-        "description": (
-            "对本机上一张证件照片做【本地】OCR 识别并加密保存到保险箱（不经云端）。"
-            "当用户给出证件图片路径并希望保存时使用。"
-            "image_path=图片完整路径，alias=用户给的代号，cred_type 可选 bank_card/id_card/passport/auto。"
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "image_path": {"type": "string", "description": "证件图片完整路径"},
-                "alias":      {"type": "string", "description": "给这个证件起的代号"},
-                "cred_type":  {"type": "string", "description": "bank_card/id_card/passport/auto，默认 auto"},
-                "note":       {"type": "string", "description": "备注（可选）"},
-            },
-            "required": ["image_path", "alias"],
-        },
-    },
-    {
-        "name": "update_credential",
-        "description": (
-            "手动补充或修改某证件的一个字段（OCR 没识别全时用）。"
-            "注意：用户在对话里直接说出的值会经过云端模型，敏感号码建议改用网页保险箱里录入。"
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "alias": {"type": "string", "description": "证件代号"},
-                "field": {"type": "string", "description": "字段名，如 expiry、bank、cvv"},
-                "value": {"type": "string", "description": "字段值"},
-            },
-            "required": ["alias", "field", "value"],
-        },
-    },
-    {
-        "name": "delete_credential",
-        "description": "从保险箱删除某个证件。用户说『删掉 XX 证件』时使用。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "alias": {"type": "string", "description": "要删除的证件代号"},
-            },
-            "required": ["alias"],
-        },
-    },
-]
-
-CREDENTIAL_HANDLERS = {
-    "list_credentials":        _t_list_credentials,
-    "reveal_credential":       _t_reveal_credential,
-    "ingest_credential_image": _t_ingest_credential_image,
-    "update_credential":       _t_update_credential,
-    "delete_credential":       _t_delete_credential,
-}
-
-
-def register_credential_tools():
-    for defn in CREDENTIAL_TOOL_DEFS:
-        register_tool(defn, CREDENTIAL_HANDLERS[defn["name"]])
