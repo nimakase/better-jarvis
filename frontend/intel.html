@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>情报台 · 贾维斯</title>
+<style>
+  :root{
+    --bg-0:#0a0b0f; --bg-1:#0f1117; --bg-2:#161922; --bg-3:#1c2030; --bg-hover:#232838;
+    --border:#242a3a; --border-soft:#1b2030;
+    --text:#e6e8ee; --text-dim:#9aa3b2; --text-faint:#5a6373;
+    --accent:#6366f1; --green:#34d399; --yellow:#fbbf24; --red:#f87171;
+    --radius:14px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; background:var(--bg-0); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:760px; margin:0 auto; padding:18px 16px 60px;}
+  .top{display:flex; align-items:center; gap:10px; padding:8px 2px 14px;}
+  .top a{color:var(--text-dim); text-decoration:none; font-size:20px;}
+  .top h1{font-size:17px; font-weight:600; margin:0;}
+  .top .date{font-size:12px; color:var(--text-faint); margin-left:auto;}
+  .top .refresh{cursor:pointer; color:var(--text-dim); font-size:18px;}
+  .cards{display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px;}
+  .mc{background:var(--bg-2); border:1px solid var(--border); border-radius:10px; padding:11px 12px;}
+  .mc .l{font-size:12px; color:var(--text-dim);}
+  .mc .v{font-size:21px; font-weight:600; margin-top:2px;}
+  .sec{margin-bottom:14px;}
+  .sec h2{font-size:13px; color:var(--text-dim); font-weight:500; margin:0 0 8px 2px;}
+  .card{background:var(--bg-2); border:1px solid var(--border); border-radius:var(--radius); padding:6px 14px;}
+  .item{padding:10px 0; border-top:1px solid var(--border-soft); display:flex; gap:10px; align-items:flex-start;}
+  .item:first-child{border-top:none;}
+  .pill{font-size:11px; padding:2px 8px; border-radius:8px; white-space:nowrap; flex:none;}
+  .sev5,.sev4{background:rgba(248,113,113,.15); color:var(--red);}
+  .sev3{background:rgba(251,191,36,.15); color:var(--yellow);}
+  .sevlow{background:var(--bg-3); color:var(--text-dim);}
+  .item .txt{flex:1; min-width:0; font-size:13px; line-height:1.5;}
+  .item a.src{color:var(--text-faint); font-size:12px; text-decoration:none;}
+  .bar{height:6px; background:var(--bg-3); border-radius:3px; margin-top:4px; overflow:hidden;}
+  .bar > i{display:block; height:6px; border-radius:3px;}
+  .rowflex{display:flex; justify-content:space-between; font-size:13px; align-items:center;}
+  .rev{padding:11px 0; border-top:1px solid var(--border-soft);}
+  .rev:first-child{border-top:none;}
+  .rev .act{display:flex; gap:8px; margin-top:8px;}
+  button{font-family:inherit; cursor:pointer; border-radius:8px; font-size:13px; padding:6px 12px;}
+  .btn{background:var(--accent); color:#fff; border:none;}
+  .ghost{background:transparent; color:var(--text-dim); border:1px solid var(--border);}
+  .chip{display:inline-flex; align-items:center; gap:6px; font-size:12px; padding:4px 10px; border-radius:8px;
+    background:var(--bg-3); border:1px solid var(--border);}
+  .dot{width:7px; height:7px; border-radius:50%;}
+  .on{background:var(--green);} .off{background:var(--yellow);}
+  .muted{color:var(--text-faint); font-size:12px; padding:10px 0;}
+  .toast{position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:var(--bg-3);
+    border:1px solid var(--border); padding:9px 16px; border-radius:10px; font-size:13px; opacity:0; transition:.2s;}
+  .toast.show{opacity:1;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <a href="/" title="返回">‹</a>
+    <h1>情报台</h1>
+    <a href="/reports" style="color:var(--accent);text-decoration:none;font-size:13px;margin-left:10px">报告中心 ›</a>
+    <span class="date" id="date" style="margin-left:auto"></span>
+    <span class="refresh" id="refresh" title="刷新" style="margin-left:10px">⟳</span>
+  </div>
+  <div id="hubspot" class="sec"></div>
+  <div id="root"><div class="muted">加载中…</div></div>
+</div>
+<div id="toast" class="toast"></div>
+
+<script>
+function toast(m){const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2000);}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+const TLABEL={pricing:'涨价',lead_time:'交期',shortage:'缺货',oversupply:'过剩',demand_shift:'需求下滑',capacity:'产能',layoff:'裁员',eol_pcn:'EOL',closure:'关厂',m_and_a:'并购',write_down:'减值',policy:'政策'};
+const BEHAV={pause_both:'休假两轨都停',ask:'休假每次问',keep:'休假照常'};
+
+async function load(){
+  const root=document.getElementById('root');
+  try{
+    const d=await (await fetch('/api/intel/overview')).json();
+    document.getElementById('date').textContent=d.date||'';
+    root.innerHTML=render(d);
+    bind();
+  }catch(e){ root.innerHTML='<div class="muted">加载失败：'+esc(e)+'</div>'; }
+}
+
+function sevClass(s){ s=s||0; return s>=4?'sev'+s:(s>=3?'sev3':'sevlow'); }
+
+function render(d){
+  const sigTotal=Object.values(d.counts||{}).reduce((a,b)=>a+b,0);
+  const tr=(d.delivery&&d.delivery.tracks)||{};
+  const st=k=>(tr[k]&&tr[k].status==='paused')?'暂停':'正常';
+
+  let html='';
+  // metric cards
+  html+=`<div class="cards">
+    <div class="mc"><div class="l">活跃信号</div><div class="v">${sigTotal}</div></div>
+    <div class="mc"><div class="l">热点赛道</div><div class="v">${(d.hot_sectors||[]).length}</div></div>
+    <div class="mc"><div class="l">待审核</div><div class="v" style="color:${(d.reviews||[]).length?'var(--yellow)':'inherit'}">${(d.reviews||[]).length}</div></div>
+    <div class="mc"><div class="l">机会轨</div><div class="v">${(d.opportunities||[]).length}</div></div>
+  </div>`;
+
+  // 投递状态
+  html+=`<div class="sec"><h2>投递状态 · ${esc(BEHAV[d.vacation_default]||d.vacation_default||'')}</h2><div class="card"><div class="item" style="border:none">
+     <span class="chip"><span class="dot ${st('report')==='正常'?'on':'off'}"></span>日报 ${st('report')}</span>
+     <span class="chip"><span class="dot ${st('prospect')==='正常'?'on':'off'}"></span>潜客清单 ${st('prospect')}</span>
+     <a class="src" href="/schedules" style="margin-left:auto">管理定时任务 ›</a>
+  </div></div></div>`;
+
+  // 待审核
+  if((d.reviews||[]).length){
+    html+='<div class="sec"><h2>待人工审核 · 行业级强信号</h2><div class="card">';
+    d.reviews.forEach(r=>{
+      html+=`<div class="rev"><div class="rowflex"><span>${esc(r.sector)} <span style="color:var(--text-faint);font-size:12px">${esc(r.reason)}</span></span></div>
+        <div class="act"><button class="btn" data-rev="${r.id}" data-ok="1">提前跟进</button>
+        <button class="ghost" data-rev="${r.id}" data-ok="0">忽略</button></div></div>`;
+    });
+    html+='</div></div>';
+  }
+
+  // 热点赛道
+  if((d.hot_sectors||[]).length){
+    const max=Math.max(...d.hot_sectors.map(h=>h.strength),1);
+    html+='<div class="sec"><h2>热点赛道 · 余料压力</h2><div class="card" style="padding:14px">';
+    d.hot_sectors.forEach((h,i)=>{
+      const col=i===0?'var(--red)':(i<3?'var(--yellow)':'var(--text-dim)');
+      html+=`<div style="margin-bottom:10px"><div class="rowflex"><span>${esc(h.sector)}</span><span style="color:var(--text-faint)">${h.strength}</span></div>
+        <div class="bar"><i style="width:${Math.round(h.strength/max*100)}%;background:${col}"></i></div></div>`;
+    });
+    html+='</div></div>';
+  }
+
+  // 信号流
+  html+='<div class="sec"><h2>信号流</h2><div class="card">';
+  (d.feed||[]).forEach(f=>{
+    const lbl=TLABEL[f.type]||f.type;
+    html+=`<div class="item"><span class="pill ${sevClass(f.severity)}">${esc(lbl)}·${f.severity||'-'}</span>
+      <span class="txt">${esc(f.summary)}</span>
+      ${f.source_url?`<a class="src" href="${esc(f.source_url)}" target="_blank" rel="noopener">原文↗</a>`:''}</div>`;
+  });
+  if(!(d.feed||[]).length) html+='<div class="muted">近期信号库为空。</div>';
+  html+='</div></div>';
+
+  // 机会轨
+  if((d.opportunities||[]).length){
+    html+='<div class="sec"><h2>机会轨 · 点名公司（bonus 线索）</h2><div class="card">';
+    d.opportunities.forEach(o=>{
+      html+=`<div class="item"><span class="txt">${esc(o.company_name)} <span style="color:var(--text-faint)">${esc(o.note||'')}</span></span></div>`;
+    });
+    html+='</div></div>';
+  }
+  return html;
+}
+
+function bind(){
+  document.querySelectorAll('[data-rev]').forEach(b=>b.addEventListener('click',async()=>{
+    const id=b.getAttribute('data-rev'), ok=b.getAttribute('data-ok')==='1';
+    try{
+      const r=await fetch(`/api/intel/review/${id}/decide`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({approved:ok})});
+      const d=await r.json();
+      toast(ok?'已批准，该赛道可提前跟进':'已忽略');
+      if(d.ok) load();
+    }catch(e){ toast('操作失败'); }
+  }));
+  document.getElementById('refresh').addEventListener('click',load);
+}
+// ── HubSpot 本地登录调试块 ──
+const HBCOLOR={ok:'var(--green)',login_in_progress:'var(--yellow)',busy:'var(--yellow)',expired:'var(--red)',failed:'var(--red)',unknown:'var(--text-faint)',closing:'var(--text-faint)'};
+async function hbPost(url,msg){ try{ const d=await (await fetch(url,{method:'POST'})).json(); toast(msg||d.message); return d; }catch(e){ toast('操作失败'); } }
+let _hbPoll=null;
+function hbStartPoll(){ clearInterval(_hbPoll); let n=0; _hbPoll=setInterval(async()=>{ n++; await loadHubspot(); const d=await (await fetch('/api/hubspot/status')).json(); if(d.status==='ok'||d.status==='failed'||n>40) clearInterval(_hbPoll); },3000); }
+async function loadHubspot(){
+  const el=document.getElementById('hubspot');
+  try{
+    const d=await (await fetch('/api/hubspot/status')).json();
+    el.innerHTML=`<h2>HubSpot 连接（本地调试）</h2><div class="card"><div class="item" style="border:none;align-items:center">
+      <span class="dot" style="background:${HBCOLOR[d.status]||'var(--text-faint)'}"></span>
+      <span class="txt">${esc(d.message)}</span>
+      <button class="btn" id="hb-login">重新登录</button>
+      <button class="ghost" id="hb-check">检测</button>
+      <button class="ghost" id="hb-close">关闭窗口</button></div></div>`;
+    document.getElementById('hb-login').onclick=async()=>{ await hbPost('/api/hubspot/login','已在本机弹出 Chrome，请完成登录'); hbStartPoll(); };
+    document.getElementById('hb-check').onclick=async()=>{ toast('检测中…'); await hbPost('/api/hubspot/check'); loadHubspot(); };
+    document.getElementById('hb-close').onclick=async()=>{ await hbPost('/api/hubspot/close'); loadHubspot(); };
+  }catch(e){ el.innerHTML='<div class="muted">HubSpot 状态获取失败</div>'; }
+}
+load();
+loadHubspot();
+</script>
+</body>
+</html>

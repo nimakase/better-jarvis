@@ -10,9 +10,13 @@
 存储与算法见 intel/signal_library.py，设计契约见 intel/signal_library_spec.md。
 """
 import json
+from functools import partial
 
-from core.registry import tool
+from core.registry import tool as _tool
 from intel import signal_library as sl
+
+# 本连接器所有工具归入 signal_intel 组（为将来渐进披露铺路）
+tool = partial(_tool, group="signal_intel")
 
 _inited = False
 

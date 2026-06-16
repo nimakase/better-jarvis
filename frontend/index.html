@@ -541,6 +541,14 @@
     <h1>贾维斯</h1>
   </div>
   <div class="actions">
+    <button class="btn-sm" onclick="location.href='/intel'" title="情报台">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3l2 6 4-14 2 8h7"/></svg>
+      情报台
+    </button>
+    <button class="btn-sm" onclick="location.href='/schedules'" title="定时任务管理">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      定时任务
+    </button>
     <button class="btn-sm" onclick="showMemory()" title="查看记忆库">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg>
       记忆库
@@ -1312,5 +1320,6 @@ if ("serviceWorker" in navigator) {
   });
 }
 </script>
+<script src="/push.js"></script>
 </body>
 </html>

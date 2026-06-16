@@ -25,6 +25,11 @@ from web import credentials as web_credentials
 from web import skills as web_skills
 from web import memory as web_memory
 from web import files as web_files
+from web import schedules as web_schedules
+from web import push as web_push
+from web import intel as web_intel
+from web import hubspot as web_hubspot
+from web import reports as web_reports
 
 # 注册工具：导入 tool_builder 即注册元工具；自动发现 connectors/ 下所有连接器（含内置记忆工具）
 registry.discover_connectors()
@@ -56,6 +61,11 @@ app.include_router(web_credentials.router)
 app.include_router(web_skills.router)
 app.include_router(web_memory.router)
 app.include_router(web_files.router)
+app.include_router(web_schedules.router)
+app.include_router(web_push.router)
+app.include_router(web_intel.router)
+app.include_router(web_hubspot.router)
+app.include_router(web_reports.router)
 
 
 # ── 启动 ──────────────────────────────────────────────────────────────────────
