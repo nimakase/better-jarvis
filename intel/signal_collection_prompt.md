@@ -65,4 +65,34 @@
 
 ## 输出格式
 
-**只输出�
+**只输出一个 JSON 数组**，无其它文字。每个元素：
+
+```json
+{
+  "summary": "一句话说清这条信号（日报会直接展示）",
+  "source_url": "https://...",
+  "source_type": "news | press_release | earnings | distributor | forum | other",
+  "date_event": "2026-06-12",
+  "scope": "company",
+  "signal_type": "closure",
+  "direction": "up | down | flat | na",
+  "severity": 4,
+  "surplus_implication": 4,
+  "confidence": 3,
+  "sectors": ["industrial", "ind_vfd_lv"],
+  "components": ["SiC_IGBT", "MCU"],
+  "regions": ["Germany"],
+  "companies": [
+    {"company_name": "XDrive GmbH", "website": "xdrive.de", "country": "Germany", "note": "关闭低压变频器产线，清理 IGBT/MCU 库存"}
+  ]
+}
+```
+
+字段缺省可省略（`companies`、`sectors`、`date_event` 等没有就不填）；`half_life_days` 不用填，入库时按类型自动赋默认值。
+
+## 硬性约束
+
+- 不编造公司、不编造来源 URL。查不到可靠来源的不要写。
+- 一条信号只描述一个事件；同一事件别拆成多条。
+- 不去重（交给入库层）；但同一次输出内不要明显重复。
+- 输出必须是合法 JSON 数组，能被 `json.loads` 解析。

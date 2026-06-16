@@ -46,11 +46,26 @@ _scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
 
 # ── 任务执行 ──────────────────────────────────────────────────────────────────
 
-async def _run_job(name: str, prompt: str, delivery: dict):
-    """执行一个定时任务，使用独立的 Controller 实例。"""
+async def _run_job(name: str, prompt: str, delivery: dict, track: str = ""):
+    """执行一个定时任务，使用独立的 Controller 实例。
+
+    track（可选）：投递轨道名（如 report / prospect）。若该轨道被投递闸门拦住
+    （对话暂停或休假区间），则整个任务跳过——不运行、不推送（潜客轨即"冻结不烧节点"）。
+    无 track 的老任务行为完全不变。
+    """
     from core.controller import JarvisController
 
     logger.info(f"定时任务触发：{name}")
+
+    if track:
+        try:
+            from core import delivery as _delivery
+            paused, reason = _delivery.is_paused(track)
+            if paused:
+                logger.info(f"定时任务 {name} 跳过（轨道 {track} 暂停：{reason}）")
+                return
+        except Exception as e:
+            logger.warning(f"投递闸门检查失败（继续执行）：{e}")
 
     try:
         sc = JarvisController()
@@ -123,7 +138,8 @@ def _register_job(cfg: dict):
     _scheduler.add_job(
         _run_job,
         trigger=CronTrigger.from_crontab(cfg["cron"], timezone="Asia/Shanghai"),
-        kwargs={"name": name, "prompt": cfg["prompt"], "delivery": cfg.get("delivery", {})},
+        kwargs={"name": name, "prompt": cfg["prompt"], "delivery": cfg.get("delivery", {}),
+                "track": cfg.get("track", "")},
         id=name,
         replace_existing=True,
         misfire_grace_time=300,
@@ -223,6 +239,26 @@ def resume_schedule(name: str) -> tuple[bool, str]:
     _save_config(name, cfg)
     _register_job(cfg)
     return True, f"任务 {name} 已恢复"
+
+
+def update_schedule(name: str, cron: Optional[str] = None) -> tuple[bool, str]:
+    """更新任务的执行时间（cron）。校验通过后落盘；若任务在运行则重注册生效。"""
+    cfg = _load_config(name)
+    if not cfg:
+        return False, f"任务 {name} 不存在"
+    if cron is not None:
+        try:
+            CronTrigger.from_crontab(cron, timezone="Asia/Shanghai")
+        except Exception as e:
+            return False, f"cron 表达式无效：{e}"
+        cfg["cron"] = cron
+    _save_config(name, cfg)
+    if cfg.get("status") == "active":
+        try:
+            _register_job(cfg)   # replace_existing=True，原子替换触发时间
+        except Exception as e:
+            return False, f"更新后注册失败：{e}"
+    return True, f"任务 {name} 执行时间已更新为 {cfg['cron']}"
 
 
 def list_schedules() -> list[dict]:

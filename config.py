@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     max_tokens_response: int = 4096
     context_window_soft_limit: int = 800_000
 
+    # 工具按域渐进披露（step7，默认关；需在真实模型上 A/B 后再决定是否开）
+    # 开启后：每轮只把「核心常驻工具 + load_tools 元工具」暴露给模型，
+    # 领域工具由模型按需 load_tools(group) 加载。关闭时行为与历史完全一致。
+    progressive_tools: bool = Field(default=False, validation_alias="JARVIS_PROGRESSIVE_TOOLS")
+    # 常驻核心工具（按工具名，跨领域、几乎每轮都可能用到）。逗号分隔，可经 env 覆盖。
+    core_tool_names: str = "query_memory,write_memory,send_file_to_chat"
+
     # 服务绑定（默认仅本地回环；容器/公网部署用 JARVIS_HOST/JARVIS_PORT 覆盖）
     host: str = Field(default="127.0.0.1", validation_alias="JARVIS_HOST")
     port: int = Field(default=8000, validation_alias="JARVIS_PORT")
@@ -89,3 +96,9 @@ CONTEXT_WINDOW_SOFT_LIMIT = settings.context_window_soft_limit
 
 HOST = settings.host
 PORT = settings.port
+
+# 渐进披露（默认关，纯加法）
+PROGRESSIVE_TOOLS = settings.progressive_tools
+CORE_TOOL_NAMES   = tuple(
+    n.strip() for n in settings.core_tool_names.split(",") if n.strip()
+)

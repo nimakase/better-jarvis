@@ -24,6 +24,7 @@ class ToolSpec:
     description: str
     input_schema: dict
     handler: Callable
+    group: str = "general"   # 领域分组，为将来 controller 渐进披露铺路（默认 general）
 
 
 # 注册表：name -> ToolSpec；_order 保留注册顺序（影响呈现给模型的顺序）
@@ -46,15 +47,20 @@ def register_tool(definition: dict, handler: Callable) -> None:
         description=definition.get("description", ""),
         input_schema=definition.get("input_schema", dict(_EMPTY_SCHEMA)),
         handler=handler,
+        group=definition.get("group", "general"),
     ))
 
 
-def tool(name: str, description: str, input_schema: Optional[dict] = None):
+def tool(name: str, description: str, input_schema: Optional[dict] = None,
+         group: str = "general"):
     """装饰器：把一个（async）函数声明为工具并注册。
 
     用法：
         @tool("weather", "查询天气", {"type":"object","properties":{...},"required":[...]})
         async def weather(city: str) -> str: ...
+
+    group：领域分组（如 "signal_intel"），默认 "general"。仅作元数据，
+    不改变现有披露行为；为将来按组渐进披露铺路。
     """
     def deco(fn: Callable) -> Callable:
         register_spec(ToolSpec(
@@ -62,17 +68,31 @@ def tool(name: str, description: str, input_schema: Optional[dict] = None):
             description=description,
             input_schema=input_schema or dict(_EMPTY_SCHEMA),
             handler=fn,
+            group=group,
         ))
         return fn
     return deco
 
 
-def definitions() -> list[dict]:
-    """按注册顺序返回所有工具的 input_schema 定义（供 controller 转 OpenAI 格式）。"""
+def definitions(group: Optional[str] = None) -> list[dict]:
+    """按注册顺序返回工具的 input_schema 定义（供 controller 转 OpenAI 格式）。
+
+    group=None（默认）→ 全部工具，行为与历史完全一致。
+    group="x"        → 只返回该组工具（为渐进披露预留，现阶段无人传）。
+    """
+    specs = (_SPECS[n] for n in _ORDER)
     return [
         {"name": s.name, "description": s.description, "input_schema": s.input_schema}
-        for s in (_SPECS[n] for n in _ORDER)
+        for s in specs if group is None or s.group == group
     ]
+
+
+def groups() -> dict[str, list[str]]:
+    """返回 {组名: [工具名, ...]}，按注册顺序。供分组披露/自省使用。"""
+    out: dict[str, list[str]] = {}
+    for n in _ORDER:
+        out.setdefault(_SPECS[n].group, []).append(n)
+    return out
 
 
 def get_handler(name: str) -> Optional[Callable]:

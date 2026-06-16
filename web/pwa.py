@@ -15,6 +15,24 @@ async def index():
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@router.get("/schedules", response_class=HTMLResponse)
+async def schedules_page():
+    """定时任务管理页（独立页面，开关启停 + 改执行时间）。"""
+    return HTMLResponse((FRONTEND_DIR / "schedules.html").read_text(encoding="utf-8"))
+
+
+@router.get("/intel", response_class=HTMLResponse)
+async def intel_page():
+    """情报台（信号流 / 热点赛道 / 待审核 / 投递状态）。"""
+    return HTMLResponse((FRONTEND_DIR / "intel.html").read_text(encoding="utf-8"))
+
+
+@router.get("/reports", response_class=HTMLResponse)
+async def reports_page():
+    """报告中心（按日期归档的报告快照）。"""
+    return HTMLResponse((FRONTEND_DIR / "reports.html").read_text(encoding="utf-8"))
+
+
 @router.get("/manifest.webmanifest")
 async def pwa_manifest():
     return FileResponse(
@@ -28,6 +46,15 @@ async def pwa_service_worker():
     # Service Worker 必须从根路径返回，才能接管整个站点；不缓存 SW 本身
     return FileResponse(
         FRONTEND_DIR / "sw.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@router.get("/push.js")
+async def pwa_push_js():
+    return FileResponse(
+        FRONTEND_DIR / "push.js",
         media_type="application/javascript",
         headers={"Cache-Control": "no-cache"},
     )
