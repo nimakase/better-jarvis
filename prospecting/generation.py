@@ -83,6 +83,32 @@ def select_node(tree_path: str | Path) -> Optional[dict]:
     }
 
 
+def mark_node_done(tree_path: str | Path, leaf_id: str) -> bool:
+    """跑完一个节点后把它标 done 并写回树，使下次 select 推进到下一个 pending。
+
+    顺带重算所在顶层赛道状态：全部叶子 done→done，部分 done→partial。
+    写的是 jarvis 自己的树副本（见 workflow_defs 路径解析），不影响外部数据源。
+    """
+    p = Path(tree_path)
+    tree = json.loads(p.read_text(encoding="utf-8"))
+    found = False
+    for sec in tree.get("sectors", []):
+        leaves = _collect_leaves(sec)
+        for leaf in leaves:
+            if leaf.get("id") == leaf_id:
+                leaf["status"] = "done"
+                found = True
+        # 仅当 sector 真有子节点（不是它自己当叶子）时才重算赛道状态
+        if sec.get("children"):
+            if all(l.get("status") == "done" for l in leaves):
+                sec["status"] = "done"
+            elif any(l.get("status") == "done" for l in leaves):
+                sec["status"] = "partial"
+    if found:
+        p.write_text(json.dumps(tree, ensure_ascii=False, indent=2), encoding="utf-8")
+    return found
+
+
 # ────────────────────────── 附加意向（覆盖轨） ──────────────────────────
 
 def _tags_and_sources(signals: list[dict]) -> tuple[list[str], list[str], list[int]]:

@@ -13,8 +13,10 @@ from typing import AsyncGenerator, Callable
 from openai import AsyncOpenAI
 
 import config
-from core import memory as mem
+from core import profile
 from core import registry
+from core import reports as _reports
+from core import workflow_registry as _workflows
 from core.results import ToolResult
 # 向后兼容：连接器/技能仍可 `from core.controller import register_tool`
 from core.registry import register_tool
@@ -33,8 +35,7 @@ FIXED_SYSTEM_PROMPT = """你是贾维斯，Ned 的个人 AI 助理。你的职�
 【路由规则】
 - 能自己答的直接答，不调工具
 - 需要实时数据才调对应连接器工具
-- 需要写入或更新用户信息时调 write_memory
-- 查询已知用户信息时调 query_memory
+- 用户透露【长期稳定】的事实或偏好（风险偏好、家庭成员、长期目标、关键日期、固定习惯等）时，调 remember_fact 钉进用户档案；一次性/临时信息不要记
 - 生成任何文件（PDF、Excel、报告、文档等）后，必须调用 send_file_to_chat 把文件发到对话界面，不要只告知路径
 
 【证件保险箱（高敏感，单独处理）】
@@ -48,6 +49,20 @@ FIXED_SYSTEM_PROMPT = """你是贾维斯，Ned 的个人 AI 助理。你的职�
 【动作安全】
 - 只读操作直接执行
 - 不可逆操作（发消息、删除）必须先告知用户将要做什么，获得确认后再执行
+
+【报告政策（重要，避免滥用）】
+- 报告是"归档成档、可在线查看/发送"的 PDF 工件，不是更长的回答。生成报告调 generate_report。
+- 默认一律用【对话】回答。只有用户明确说"出/生成/做一份…报告 / 日报 / PDF / 导出 / 存档 / 发我一份"这类措辞时才生成报告。
+- "怎么样 / 分析一下 / 什么情况 / 帮我看看 / 某赛道某公司近况"等一律对话回答，绝不生成报告。
+- 绝不主动提议生成报告（不要在回答末尾问"要不要我帮你生成一份报告"），除非用户自己问起。
+- 不明确要哪种报告时，先问用户要哪种、什么范围，不要擅自选型或瞎填参数。
+- 周期性报告（如每日市场日报）由定时任务自动产出，日常对话中不要主动去生成。
+
+【工作流政策（多步骤任务，重要）】
+- 工作流（如 prospect_daily 今日潜客名单）是有副作用的多步骤任务，用 run_workflow 运行。
+- 只在用户【明确要求运行】（如"跑一下潜客 / 生成今日名单"）或定时任务触发时才运行；绝不主动或因为联想而运行。
+- 对会打开浏览器/连接 HubSpot 的工作流（标注"有副作用"），必须先用一句话告知"我将运行X，会打开 Chrome 连 HubSpot"，得到用户确认后再调 run_workflow。
+- 需求不明确时先问，不要擅自选择工作流或瞎跑。
 
 【免责声明模板】
 投资建议结尾加："（以上仅供参考，不构成投资建议，请结合自身情况判断）"
@@ -74,14 +89,34 @@ load_tools(group="领域名") 加载该组；下一轮你即可看到并调用�
 的说明里列出了所有可用领域及其包含的工具。不要凭空臆造工具名。"""
 
 
+def _network_capability_note() -> str:
+    """据当前模型是否带 :online（OpenRouter 联网插件）告诉模型它能否联网。
+    模型不会凭空知道自己的运行配置，必须显式说明，否则它会错误地拒绝/假装联网。"""
+    if ":online" in config.CLAUDE_MODEL:
+        return ("【联网能力】你当前已接入实时联网检索（OpenRouter :online）。"
+                "需要最新信息（新闻、行情、近期事件、网页内容）时可以直接作答，"
+                "并尽量注明信息可能的时效；不要声称自己无法上网。")
+    return ("【联网能力】你当前【没有】实时联网能力，只能基于已有知识和被调用工具"
+            "返回的数据作答。涉及最新/实时信息时，明确说明你无法联网核实，不要编造。")
+
+
 def _build_system_prompt() -> str:
     now = datetime.now().strftime("现在是 %Y年%m月%d日 %H:%M，%A")
-    context = mem.build_context_block()
-    parts = [FIXED_SYSTEM_PROMPT, f"【当前时间】{now}"]
+    parts = [FIXED_SYSTEM_PROMPT, f"【当前时间】{now}", _network_capability_note()]
     if config.PROGRESSIVE_TOOLS:
         parts.append(PROGRESSIVE_PROMPT_NOTE)
-    if context:
-        parts.append(context)
+    # 常驻用户档案（core memory）：少量长期硬事实，每轮注入，跨会话钉住不淡化
+    block = profile.build_block()
+    if block:
+        parts.append(block)
+    # 报告目录：让模型知道有哪些报告类型、何时用、要什么参数（配合上面的报告政策）
+    catalog = _reports.catalog_block()
+    if catalog:
+        parts.append(catalog)
+    # 工作流目录：可运行的多步骤任务（配合上面的工作流政策）
+    wf_catalog = _workflows.catalog_block()
+    if wf_catalog:
+        parts.append(wf_catalog)
     return "\n\n".join(parts)
 
 
@@ -165,10 +200,20 @@ async def _execute_tool(name: str, inputs: dict) -> ToolResult:
     return ToolResult(text=f"未知工具：{name}")
 
 
+# 后台/工作流实例（非真人对话）禁用的工具：它们会写【用户个人长期记忆】或留下
+# 代码/调度等持久产物。这些只应由真人面对面的对话实例调用，否则后台跑潜客/采集/
+# 定时任务时会把它自己的临时任务塞进用户档案、或擅自自建工具/建调度（污染）。
+BACKGROUND_BLOCKED_TOOLS = {
+    "remember_fact",                                              # 写个人 core memory
+    "create_tool", "edit_tool", "delete_tool",                   # 自建/改/删工具
+    "create_schedule", "delete_schedule", "pause_schedule", "resume_schedule",  # 改定时任务
+}
+
+
 # ── 主控对话循环 ──────────────────────────────────────────────────────────────
 
 class JarvisController:
-    def __init__(self):
+    def __init__(self, interactive: bool = True):
         self.client = AsyncOpenAI(
             api_key=config.OPENROUTER_API_KEY,
             base_url=config.OPENROUTER_BASE_URL,
@@ -177,6 +222,9 @@ class JarvisController:
         self.pending_actions: list = []
         # 渐进披露：本会话已激活的领域分组（核心工具始终可见，与此无关）。
         self.active_groups: set[str] = set()
+        # interactive=True 是真人面对面的对话实例；后台/工作流/定时跑的设 False，
+        # 届时屏蔽 BACKGROUND_BLOCKED_TOOLS（不写用户个人记忆、不自建工具/调度）。
+        self.interactive = interactive
 
     def reset_session(self):
         self.messages = []
@@ -242,21 +290,31 @@ class JarvisController:
         注意：这只影响「告知模型有哪些工具」；任何工具的 handler 仍在全量注册表里，
         即便未被暴露，一旦被调用也照常执行——因此该特性纯加法、不破坏任何调用。
         """
+        blocked = set() if self.interactive else BACKGROUND_BLOCKED_TOOLS
+
         if not config.PROGRESSIVE_TOOLS:
-            return self.get_all_tools()
+            return [_to_openai_tool(d) for d in registry.definitions()
+                    if d["name"] not in blocked]
 
         core = set(config.CORE_TOOL_NAMES)
         name_to_group = {n: g for g, names in registry.groups().items() for n in names}
         exposed = [
             _to_openai_tool(d)
             for d in registry.definitions()
-            if d["name"] in core or name_to_group.get(d["name"]) in self.active_groups
+            if d["name"] not in blocked
+            and (d["name"] in core or name_to_group.get(d["name"]) in self.active_groups)
         ]
         exposed.append(_to_openai_tool(self._build_load_tools_def()))
         return exposed
 
-    async def chat(self, user_message: str) -> AsyncGenerator[str, None]:
-        """流式处理用户消息，内部自动处理工具调用循环。"""
+    async def chat(self, user_message: str) -> AsyncGenerator[dict, None]:
+        """流式处理用户消息，内部自动处理工具调用循环。
+
+        产出的是【结构化事件】而非裸字符串，把"对话正文"和"工具进度"分到两条通道，
+        避免进度行混进正文（再也不会在历史里残留 ⚙️/工具清单）：
+          - {"type": "text", "text": "..."}  模型真正的回复文本分片
+          - {"type": "tool", "name": "..."}  调用某工具的进度提示（传输层可低调渲染）
+        """
         self.pending_actions = []
         self.messages = await _compress_history(self.client, self.messages)
         self.messages.append({"role": "user", "content": user_message})
@@ -296,7 +354,7 @@ class JarvisController:
                 # 文字内容
                 if delta.content:
                     full_text += delta.content
-                    yield delta.content
+                    yield {"type": "text", "text": delta.content}
 
                 # 工具调用 delta（OpenAI 流式下分片到达）
                 if delta.tool_calls:
@@ -322,7 +380,7 @@ class JarvisController:
             if tool_rounds > MAX_TOOL_ROUNDS:
                 note = (f"已连续调用工具 {MAX_TOOL_ROUNDS} 轮仍未完成，先停下避免死循环。"
                         f"可能是需求太宽或缺合适工具——请把任务拆细些，或换个说法再试。")
-                yield "\n⚠️ " + note + "\n"
+                yield {"type": "text", "text": "\n⚠️ " + note + "\n"}
                 self.messages.append({"role": "assistant", "content": note})
                 break
 
@@ -352,7 +410,8 @@ class JarvisController:
                 # 仅在开启时拦截；激活领域后下一轮即可见到该组工具。
                 if config.PROGRESSIVE_TOOLS and tc["name"] == self.LOAD_TOOLS_NAME:
                     text = self._activate_group(inputs.get("group", ""))
-                    yield f"\n🧩 {text}\n"
+                    # 只发结构化进度事件（不把工具清单塞进正文流）；清单仅进模型可见的 tool 消息。
+                    yield {"type": "tool", "name": "加载工具组"}
                     self.messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
@@ -360,7 +419,16 @@ class JarvisController:
                     })
                     continue
 
-                yield f"\n⚙️ 调用工具：{tc['name']}...\n"
+                # 兜底：后台/工作流实例即便模型硬调被屏蔽的工具，也不执行（防污染用户档案等）。
+                if not self.interactive and tc["name"] in BACKGROUND_BLOCKED_TOOLS:
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": f"（后台运行环境，已禁用工具 {tc['name']}：不写用户个人记忆/不自建工具或调度。请直接完成本职任务并输出结果。）",
+                    })
+                    continue
+
+                yield {"type": "tool", "name": tc["name"]}
                 result = await _execute_tool(tc["name"], inputs)
                 self.pending_actions.extend(result.actions)
                 # 若模型直接调用了某领域工具（未先 load_tools），把该组一并激活，

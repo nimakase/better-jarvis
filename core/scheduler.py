@@ -68,12 +68,12 @@ async def _run_job(name: str, prompt: str, delivery: dict, track: str = ""):
             logger.warning(f"投递闸门检查失败（继续执行）：{e}")
 
     try:
-        sc = JarvisController()
+        sc = JarvisController(interactive=False)  # 后台定时实例：不写用户档案/不自建工具或调度
         result = ""
-        async for chunk in sc.chat(prompt):
-            # 过滤掉工具调用状态行（⚙️ 调用工具...）
-            if not chunk.startswith("\n⚙️"):
-                result += chunk
+        async for ev in sc.chat(prompt):
+            # 只累加正文文本；工具进度走 type=="tool" 事件，定时任务不需要
+            if ev.get("type") == "text":
+                result += ev["text"]
 
         result = result.strip()
         if not result:

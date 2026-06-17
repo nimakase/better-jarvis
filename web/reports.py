@@ -26,6 +26,21 @@ async def generate_report(type_id: str):
     return JSONResponse(res, status_code=200 if res.get("ok") else 400)
 
 
+@router.get("/api/reports/{report_id}/view")
+async def view_report(report_id: str):
+    """在线查看：以 inline 方式返回 PDF，点开即看、不强制下载。"""
+    r = reports.get_report(report_id)
+    if not r or not r.get("path"):
+        return JSONResponse({"error": "报告不存在"}, status_code=404)
+    p = Path(r["path"])
+    if not p.exists():
+        return JSONResponse({"error": "文件已丢失"}, status_code=404)
+    return FileResponse(
+        str(p), media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{p.name}"'},
+    )
+
+
 @router.get("/api/reports/{report_id}/download")
 async def download_report(report_id: str):
     r = reports.get_report(report_id)

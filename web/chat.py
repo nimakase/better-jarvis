@@ -14,12 +14,26 @@ import uuid
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 import config
-from core import memory as mem
+from core import history
 from core.tool_builder import list_skills_info
 from connectors import vault
 
 router = APIRouter()
 DOWNLOAD_DIR = config.DOWNLOAD_DIR
+
+# 单一主对话：transcript 落到固定会话，跨标签/设备都能回放同一段历史。
+# 工作记忆(controller.messages)仍按连接隔离；历史层只负责"给人看"的持久记录。
+CONVERSATION_ID = history.DEFAULT_CONVERSATION
+
+
+def _seed_controller_from_history(controller) -> None:
+    """新建的会话控制器若内存为空，用持久化的文本历史给模型补上下文，
+    让换设备/重连后模型也能延续，而不仅仅是界面能回看。"""
+    if controller.messages:
+        return
+    for m in history.get_messages(CONVERSATION_ID):
+        if m["kind"] == "text" and m["role"] in ("user", "assistant"):
+            controller.messages.append({"role": m["role"], "content": m["content"]})
 
 
 @router.websocket("/ws/chat")
@@ -41,12 +55,8 @@ async def websocket_chat(websocket: WebSocket):
             # 特殊命令
             if user_message == "/reset":
                 ctx.sessions.reset(session_id)
+                history.clear(CONVERSATION_ID)
                 await websocket.send_text(json.dumps({"type": "system", "text": "会话已重置"}))
-                continue
-
-            if user_message == "/memory":
-                items = mem.list_all()
-                await websocket.send_text(json.dumps({"type": "system", "text": json.dumps(items, ensure_ascii=False, indent=2)}))
                 continue
 
             if user_message == "/skills":
@@ -55,16 +65,28 @@ async def websocket_chat(websocket: WebSocket):
                 continue
 
             controller = ctx.sessions.get(session_id)
+            _seed_controller_from_history(controller)
 
-            # 流式回复
+            # 记录用户这轮输入（持久化，供回看 / 跨设备）
+            history.append("user", user_message, conversation_id=CONVERSATION_ID)
+
+            # 流式回复：controller 现在产出结构化事件（text / tool）两条通道
             await websocket.send_text(json.dumps({"type": "start"}))
 
             full_response = ""
-            async for chunk in controller.chat(user_message):
-                full_response += chunk
-                await websocket.send_text(json.dumps({"type": "chunk", "text": chunk}))
+            async for ev in controller.chat(user_message):
+                if ev["type"] == "text":
+                    full_response += ev["text"]
+                    await websocket.send_text(json.dumps({"type": "chunk", "text": ev["text"]}))
+                elif ev["type"] == "tool":
+                    # 工具进度走独立事件，前端低调渲染、且不进对话正文/历史
+                    await websocket.send_text(json.dumps({"type": "tool_status", "name": ev["name"]}))
 
             await websocket.send_text(json.dumps({"type": "end"}))
+
+            # 持久化助手回复（仅纯文本正文；工具进度与证件揭示不入库）
+            if full_response.strip():
+                history.append("assistant", full_response, conversation_id=CONVERSATION_ID)
 
             # 处理本轮工具产生的带外动作（代码审查 / 文件下载 / 证件揭示）
             await _dispatch_actions(websocket, controller.drain_actions())
@@ -113,12 +135,14 @@ async def _dispatch_one(ws: WebSocket, action):
         src = Path(p["file_path"])
         if src.exists():
             shutil.copy2(src, DOWNLOAD_DIR / p["filename"])
-        await ws.send_text(json.dumps({
-            "type":     "file_download",
+        card = {
             "filename": p["filename"],
             "url":      f"/api/download/{p['filename']}",
             "size":     p.get("size", 0),
-        }))
+        }
+        await ws.send_text(json.dumps({"type": "file_download", **card}))
+        # 文件卡片可安全持久化（不含敏感值），回放时仍可见
+        history.append("assistant", card, kind="file", conversation_id=CONVERSATION_ID)
 
     elif kind == "credential_reveal":
         # 在本机解密取出【真实】字段值，仅推往本机浏览器。

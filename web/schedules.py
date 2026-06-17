@@ -35,3 +35,10 @@ async def api_update_cron(name: str, cron: str = Body(..., embed=True)):
     """更新执行时间。请求体：{"cron": "0 8 * * *"}。"""
     ok, msg = scheduler.update_schedule(name, cron=cron)
     return JSONResponse({"ok": ok, "message": msg}, status_code=200 if ok else 400)
+
+
+@router.delete("/api/schedules/{name}")
+async def api_delete_schedule(name: str):
+    """删除定时任务（不可恢复）。创建仍走对话，这里只负责删。"""
+    ok, msg = scheduler.delete_schedule(name)
+    return JSONResponse({"ok": ok, "message": msg}, status_code=200 if ok else 400)
