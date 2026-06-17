@@ -517,6 +517,130 @@
   .vault-status.ok { color: var(--green); }
   .vault-status.err { color: var(--red); }
   .vault-divider { height: 1px; background: var(--border-soft); margin: 0 20px; }
+
+  /* ── 统一右侧抽屉（情报台 / 定时任务 / 保险箱 / 设置）────────────────────── */
+  #drawer-scrim {
+    position: fixed; inset: 0;
+    background: rgba(6,7,11,0.55);
+    backdrop-filter: blur(2px);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s; z-index: 190;
+  }
+  #drawer-scrim.active { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed; top: 0; right: 0; bottom: 0;
+    width: 460px; max-width: 92vw;
+    background: var(--bg-1);
+    border-left: 1px solid var(--border);
+    box-shadow: -12px 0 40px rgba(0,0,0,0.4);
+    transform: translateX(100%);
+    transition: transform 0.24s cubic-bezier(.2,.7,.3,1);
+    z-index: 200; display: flex; flex-direction: column;
+  }
+  .drawer.open { transform: none; }
+  .drawer-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px; border-bottom: 1px solid var(--border-soft);
+    background: var(--bg-2); position: sticky; top: 0; z-index: 2;
+  }
+  .drawer-tabs { display: flex; gap: 4px; flex: 1; overflow-x: auto; }
+  .dtab {
+    font-size: 13px; padding: 7px 12px; border-radius: 9px; cursor: pointer;
+    background: transparent; border: 1px solid transparent; color: var(--text-faint);
+    white-space: nowrap; transition: all 0.15s;
+  }
+  .dtab:hover { color: var(--text-dim); background: var(--bg-3); }
+  .dtab.active { color: #fff; background: var(--accent-soft); border-color: var(--accent-ring); }
+  .drawer-body { flex: 1; overflow-y: auto; }
+  .dpanel { display: none; padding: 16px; }
+  .dpanel.active { display: block; }
+  @media (max-width: 560px) { .drawer { width: 100vw; max-width: 100vw; } }
+
+  /* 情报台面板（由原 /intel 迁入，按面板作用域命名，避免与其它样式冲突） */
+  #panel-intel .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:14px; }
+  #panel-intel .mc { background:var(--bg-2); border:1px solid var(--border); border-radius:10px; padding:10px; }
+  #panel-intel .mc .l { font-size:11px; color:var(--text-dim); }
+  #panel-intel .mc .v { font-size:19px; font-weight:600; margin-top:2px; }
+  #panel-intel .sec { margin-bottom:14px; }
+  #panel-intel .sec h2 { font-size:12.5px; color:var(--text-dim); font-weight:500; margin:0 0 8px 2px; }
+  #panel-intel .card { background:var(--bg-2); border:1px solid var(--border); border-radius:12px; padding:6px 14px; }
+  #panel-intel .item { padding:10px 0; border-top:1px solid var(--border-soft); display:flex; gap:10px; align-items:flex-start; }
+  #panel-intel .item:first-child { border-top:none; }
+  #panel-intel .pill { font-size:11px; padding:2px 8px; border-radius:8px; white-space:nowrap; flex:none; }
+  #panel-intel .sev5, #panel-intel .sev4 { background:rgba(248,113,113,.15); color:var(--red); }
+  #panel-intel .sev3 { background:rgba(251,191,36,.15); color:var(--yellow); }
+  #panel-intel .sevlow { background:var(--bg-3); color:var(--text-dim); }
+  #panel-intel .txt { flex:1; min-width:0; font-size:13px; line-height:1.5; }
+  #panel-intel a.src { color:var(--text-faint); font-size:12px; text-decoration:none; }
+  #panel-intel .bar { height:6px; background:var(--bg-3); border-radius:3px; margin-top:4px; overflow:hidden; }
+  #panel-intel .bar > i { display:block; height:6px; border-radius:3px; }
+  #panel-intel .rowflex { display:flex; justify-content:space-between; font-size:13px; align-items:center; }
+  #panel-intel .rev { padding:11px 0; border-top:1px solid var(--border-soft); }
+  #panel-intel .rev:first-child { border-top:none; }
+  #panel-intel .rev .act { display:flex; gap:8px; margin-top:8px; }
+  #panel-intel .chip { display:inline-flex; align-items:center; gap:6px; font-size:12px; padding:4px 10px; border-radius:8px; background:var(--bg-3); border:1px solid var(--border); }
+  #panel-intel .dot { width:7px; height:7px; border-radius:50%; }
+  #panel-intel .on { background:var(--green); } #panel-intel .off { background:var(--yellow); }
+  #panel-intel .muted { color:var(--text-faint); font-size:12px; padding:10px 0; }
+  /* 卡片仪表盘：三层 + 通用色调 + 行内动作 */
+  #panel-intel .tier { margin-bottom:8px; }
+  #panel-intel .tier-label { font-size:11px; letter-spacing:.5px; text-transform:uppercase; color:var(--text-faint); margin:14px 2px 8px; }
+  #panel-intel .tier:first-child .tier-label { margin-top:2px; }
+  #panel-intel .pill.tone-red { background:rgba(248,113,113,.15); color:var(--red); }
+  #panel-intel .pill.tone-yellow { background:rgba(251,191,36,.15); color:var(--yellow); }
+  #panel-intel .pill.tone-green { background:rgba(52,211,153,.15); color:var(--green); }
+  #panel-intel .pill.tone-dim { background:var(--bg-3); color:var(--text-dim); }
+  #panel-intel .dot.tone-red { background:var(--red); } #panel-intel .dot.tone-yellow { background:var(--yellow); }
+  #panel-intel .dot.tone-green { background:var(--green); } #panel-intel .dot.tone-dim { background:var(--text-faint); }
+  #panel-intel .rev-act { display:flex; gap:8px; margin-top:8px; }
+
+  /* 定时任务面板（由原 /schedules 迁入） */
+  #panel-schedules .card { background:var(--bg-2); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+  #panel-schedules .row { display:flex; align-items:center; gap:12px; padding:13px 14px; border-top:1px solid var(--border-soft); }
+  #panel-schedules .row:first-child { border-top:none; }
+  #panel-schedules .meta { flex:1; min-width:0; }
+  #panel-schedules .name { font-size:14px; font-weight:500; }
+  #panel-schedules .desc { font-size:12px; color:var(--text-faint); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #panel-schedules .chip { display:inline-flex; align-items:center; gap:6px; background:var(--bg-3); border:1px solid var(--border); border-radius:9px; padding:5px 10px; font-size:13px; cursor:pointer; color:var(--text); }
+  #panel-schedules .chip:hover { background:var(--bg-hover); }
+  #panel-schedules .chip.off { opacity:.45; pointer-events:none; }
+  #panel-schedules .sw { position:relative; width:42px; height:24px; flex:none; }
+  #panel-schedules .sw input { opacity:0; width:0; height:0; }
+  #panel-schedules .track { position:absolute; inset:0; background:var(--bg-3); border:1px solid var(--border); border-radius:999px; transition:.18s; }
+  #panel-schedules .knob { position:absolute; top:3px; left:3px; width:18px; height:18px; background:var(--text-faint); border-radius:50%; transition:.18s; }
+  #panel-schedules .sw input:checked + .track { background:var(--green); border-color:var(--green); }
+  #panel-schedules .sw input:checked + .track .knob { transform:translateX(18px); background:#fff; }
+  #panel-schedules .editor { margin:10px 0 4px; padding:12px; background:var(--bg-1); border:1px solid var(--border); border-radius:10px; display:none; }
+  #panel-schedules .editor.open { display:block; }
+  #panel-schedules .editor label { font-size:12px; color:var(--text-dim); display:block; margin:0 0 5px; }
+  #panel-schedules .erow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  #panel-schedules input[type=time], #panel-schedules select, #panel-schedules input[type=text] { background:var(--bg-3); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:7px 9px; font-size:13px; font-family:inherit; }
+  #panel-schedules .adv { margin-top:10px; font-size:12px; color:var(--text-faint); }
+  #panel-schedules .adv summary { cursor:pointer; }
+  #panel-schedules .adv input { width:100%; margin-top:6px; }
+  #panel-schedules .empty, #panel-schedules .err { padding:26px 12px; text-align:center; color:var(--text-faint); font-size:13px; }
+  #panel-schedules .tip { margin-top:14px; font-size:12px; color:var(--text-faint); display:flex; gap:6px; align-items:flex-start; }
+
+  /* 抽屉内通用按钮（情报台/定时任务共用） */
+  #drawer .btn { background:var(--accent); color:#fff; border:none; border-radius:8px; font-size:13px; padding:6px 12px; cursor:pointer; font-family:inherit; }
+  #drawer .ghost { background:transparent; color:var(--text-dim); border:1px solid var(--border); border-radius:8px; font-size:13px; padding:6px 12px; cursor:pointer; font-family:inherit; }
+
+  /* 设置面板 */
+  #panel-settings .set-row { padding:14px 0; border-top:1px solid var(--border-soft); }
+  #panel-settings .set-row:first-child { border-top:none; }
+  #panel-settings .set-row h3 { font-size:13.5px; font-weight:600; color:#fff; margin:0 0 4px; }
+  #panel-settings .set-row p { font-size:12px; color:var(--text-dim); margin:0 0 9px; line-height:1.5; }
+
+  /* 抽屉里复用保险箱样式时去掉模态外壳的圆角粘顶 */
+  #panel-vault .vault-head { border-radius:0; position:static; }
+  #panel-vault .vault-note { margin-left:0; margin-right:0; }
+  #panel-vault .vault-section, #panel-vault .vault-tabs, #panel-vault .vault-divider { padding-left:0; padding-right:0; margin-left:0; margin-right:0; }
+
+  /* 全局轻提示 */
+  .toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:var(--bg-3);
+    border:1px solid var(--border); color:var(--text); padding:9px 16px; border-radius:10px; font-size:13px;
+    opacity:0; transition:.2s; pointer-events:none; z-index:300; }
+  .toast.show { opacity:1; }
 </style>
 </head>
 <body>
@@ -541,25 +665,9 @@
     <h1>贾维斯</h1>
   </div>
   <div class="actions">
-    <button class="btn-sm" onclick="location.href='/intel'" title="情报台">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3l2 6 4-14 2 8h7"/></svg>
-      情报台
-    </button>
-    <button class="btn-sm" onclick="location.href='/schedules'" title="定时任务管理">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-      定时任务
-    </button>
-    <button class="btn-sm" onclick="showMemory()" title="查看记忆库">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg>
-      记忆库
-    </button>
-    <button class="btn-sm" onclick="openVault()" title="证件保险箱（加密本地存储）">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/><circle cx="12" cy="16" r="1"/></svg>
-      保险箱
-    </button>
-    <button class="btn-sm" onclick="resetSession()" title="重置当前会话">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
-      重置会话
+    <button class="btn-sm" onclick="openDrawer()" title="功能面板（情报台 / 定时任务 / 保险箱 / 设置）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      功能
     </button>
   </div>
 </header>
@@ -583,14 +691,40 @@
   <p class="hint"><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · 附件按钮或拖拽上传文件</p>
 </footer>
 
-<!-- 证件保险箱模态 -->
-<div id="vault-overlay" onclick="if(event.target===this)closeVault()">
-  <div class="vault-modal">
-    <div class="vault-head">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/><circle cx="12" cy="16" r="1"/></svg>
-      <h2>证件保险箱</h2>
-      <button class="btn-sm close" onclick="closeVault()">关闭</button>
+<!-- ── 统一右侧抽屉 ── -->
+<div id="drawer-scrim" onclick="closeDrawer()"></div>
+<aside id="drawer" class="drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <div class="drawer-tabs">
+      <button class="dtab active" data-panel="intel"     onclick="switchPanel('intel')">情报台</button>
+      <button class="dtab"        data-panel="schedules" onclick="switchPanel('schedules')">定时任务</button>
+      <button class="dtab"        data-panel="vault"     onclick="switchPanel('vault')">保险箱</button>
+      <button class="dtab"        data-panel="settings"  onclick="switchPanel('settings')">设置</button>
     </div>
+    <button class="btn-sm" onclick="closeDrawer()" title="关闭">关闭</button>
+  </div>
+  <div class="drawer-body">
+
+    <!-- 情报台 -->
+    <section class="dpanel active" id="panel-intel">
+      <div class="sec" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <span style="font-size:12px;color:var(--text-faint)" id="intel-date"></span>
+        <a class="src" href="/reports" style="color:var(--accent);margin-left:6px">报告中心 ›</a>
+        <button class="btn" style="margin-left:auto;font-size:12px;padding:5px 11px" onclick="runCollect(this)">采集今日信号</button>
+        <button class="btn" style="font-size:12px;padding:5px 11px" onclick="runProspect(this)">运行潜客名单</button>
+        <span class="ghost" style="cursor:pointer;padding:4px 10px" onclick="loadIntel()">⟳ 刷新</span>
+      </div>
+      <div id="intel-root"><div class="muted">加载中…</div></div>
+    </section>
+
+    <!-- 定时任务 -->
+    <section class="dpanel" id="panel-schedules">
+      <div id="sched-list" class="card"><div class="empty">加载中…</div></div>
+      <div class="tip"><span>💡</span><span>复杂调度仍可直接对贾维斯说，如「潜客清单改成只工作日推」。</span></div>
+    </section>
+
+    <!-- 证件保险箱 -->
+    <section class="dpanel" id="panel-vault">
     <div class="vault-note">所有信息在本机 AES 加密存储；完整号码只显示在此处，绝不发送给云端 AI。识别证件用本地 OCR，照片不上传。</div>
 
     <div class="vault-section">
@@ -667,8 +801,39 @@
       </button>
       <div class="vault-status" id="m-status"></div>
     </div>
-  </div>
-</div>
+    </section>
+
+    <!-- 设置 -->
+    <section class="dpanel" id="panel-settings">
+      <div class="set-row">
+        <h3>用户档案 · 长期记忆</h3>
+        <p>这里的事实会【每轮】注入对话，跨会话长期记住、不会随历史淡化。贾维斯也会在你透露稳定偏好时自动追加。保持精简（上限 40 条）。</p>
+        <div id="profile-list" style="margin-bottom:10px"></div>
+        <div class="erow" style="display:flex;gap:8px">
+          <input type="text" id="profile-input" placeholder="如：风险偏好 = 保守" style="flex:1;background:var(--bg-3);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 9px;font-size:13px;font-family:inherit">
+          <button class="btn" onclick="addProfileFact()">添加</button>
+        </div>
+      </div>
+      <div class="set-row">
+        <h3>连接 · HubSpot</h3>
+        <p>跑潜客流水线匹配 HubSpot 时需要在本机登录一次；平时情报台只显示连接状态灯。</p>
+        <div id="settings-hubspot"></div>
+      </div>
+      <div class="set-row">
+        <h3>当前会话</h3>
+        <p>重置会清空当前对话历史（含已持久化的记录），无法恢复。用户档案不受影响。</p>
+        <button class="ghost" onclick="resetSession()">重置会话</button>
+      </div>
+      <div class="set-row">
+        <h3>关于</h3>
+        <p>贾维斯 · 本地优先个人 AI 助理。对话历史持久化在本机，支持刷新 / 换设备回看。</p>
+      </div>
+    </section>
+
+  </div><!-- drawer-body -->
+</aside>
+
+<div id="toast" class="toast"></div>
 
 <script>
 const messagesEl  = document.getElementById("messages");
@@ -693,17 +858,41 @@ const ICON = {
 
 // ── WebSocket ──────────────────────────────────────────────────────────────
 
-// 会话 ID：存 sessionStorage —— 刷新后延续同一对话，新标签页则是独立新会话
+// 会话 ID：存 localStorage —— 关标签、刷新、换设备都延续同一段对话（配合后端持久化历史）
 const JARVIS_SESSION_ID = (() => {
-  let id = sessionStorage.getItem("jarvis_session_id");
+  let id = localStorage.getItem("jarvis_session_id");
   if (!id) {
     id = (window.crypto && crypto.randomUUID)
       ? crypto.randomUUID()
       : String(Date.now()) + Math.random().toString(16).slice(2);
-    sessionStorage.setItem("jarvis_session_id", id);
+    localStorage.setItem("jarvis_session_id", id);
   }
   return id;
 })();
+
+let _historyLoaded = false;
+
+// 加载时回放持久化的对话历史，让刷新/换设备后仍能看到此前的对话
+async function loadHistory() {
+  if (_historyLoaded) return;
+  _historyLoaded = true;
+  try {
+    const msgs = await (await fetch("/api/history")).json();
+    if (!Array.isArray(msgs) || !msgs.length) return;
+    for (const m of msgs) {
+      if (m.kind === "file" && m.content && m.content.filename) {
+        addFileDownloadCard(m.content.filename, m.content.url, m.content.size || 0);
+      } else if (m.role === "user") {
+        addUserMessage(typeof m.content === "string" ? m.content : JSON.stringify(m.content));
+      } else if (m.role === "assistant") {
+        const b = createAssistantBubble();
+        b.appendChild(document.createTextNode(typeof m.content === "string" ? m.content : JSON.stringify(m.content)));
+      }
+    }
+    addSystemMessage("— 以上为此前的对话历史 —");
+    scrollToBottom();
+  } catch (e) { /* 历史不可用时静默，不影响新对话 */ }
+}
 
 // 统一发送：自动附带 session_id，让后端按会话分桌
 function wsSend(payload) {
@@ -725,15 +914,19 @@ function connect() {
       sendBtn.disabled = true;
 
     } else if (msg.type === "chunk") {
+      // 正文流：只追加纯文本，不再夹带工具进度标记
       if (currentBubble) {
-        if (msg.text.includes("⚙️")) {
-          const span = document.createElement("span");
-          span.className = "tool-indicator";
-          span.innerHTML = ICON.gear + escHtml(msg.text.replace(/⚙️/g, "").replace(/\n/g, "").trim());
-          currentBubble.appendChild(span);
-        } else {
-          currentBubble.appendChild(document.createTextNode(msg.text));
-        }
+        currentBubble.appendChild(document.createTextNode(msg.text));
+        scrollToBottom();
+      }
+
+    } else if (msg.type === "tool_status") {
+      // 工具进度：独立事件，低调渲染为一枚 chip，不进对话正文/历史
+      if (currentBubble) {
+        const span = document.createElement("span");
+        span.className = "tool-indicator";
+        span.innerHTML = ICON.gear + escHtml("调用工具：" + (msg.name || ""));
+        currentBubble.appendChild(span);
         scrollToBottom();
       }
 
@@ -809,15 +1002,76 @@ function copyText(el) {
   });
 }
 
-// ── 保险箱模态 ───────────────────────────────────────────────────────────────
-function openVault() {
-  document.getElementById("vault-overlay").classList.add("active");
-  loadCredentials();
-  renderManualFields();
+// ── 统一右侧抽屉 ─────────────────────────────────────────────────────────────
+const _panelLoaders = {
+  intel:     () => loadIntel(),
+  schedules: () => loadSchedules(),
+  vault:     () => { loadCredentials(); renderManualFields(); },
+  settings:  () => { loadProfile(); loadHubspot(); },
+};
+
+// ── 用户档案 / core memory ───────────────────────────────────────────────────
+async function loadProfile() {
+  const box = document.getElementById("profile-list");
+  try {
+    const facts = await (await fetch("/api/profile")).json();
+    if (!Array.isArray(facts) || !facts.length) {
+      box.innerHTML = `<div style="font-size:12px;color:var(--text-faint);padding:6px 0">还没有长期事实。</div>`;
+      return;
+    }
+    box.innerHTML = facts.map(f => `
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;margin-bottom:6px;background:var(--bg-2);border:1px solid var(--border);border-radius:9px">
+        <span style="flex:1;font-size:13px">${esc(f.text)}</span>
+        <span title="删除" onclick="deleteProfileFact(${f.id})" style="cursor:pointer;color:var(--text-faint);font-size:16px;line-height:1">×</span>
+      </div>`).join("");
+  } catch (e) { box.innerHTML = `<div style="font-size:12px;color:var(--red)">加载失败</div>`; }
 }
-function closeVault() {
-  document.getElementById("vault-overlay").classList.remove("active");
+async function addProfileFact() {
+  const inp = document.getElementById("profile-input");
+  const text = inp.value.trim();
+  if (!text) return;
+  try {
+    const d = await (await fetch("/api/profile", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ text })
+    })).json();
+    if (d.ok) { inp.value = ""; loadProfile(); } else { toast(d.message || "添加失败"); }
+  } catch (e) { toast("网络错误"); }
 }
+async function deleteProfileFact(id) {
+  try { await fetch(`/api/profile/${id}`, { method: "DELETE" }); loadProfile(); }
+  catch (e) { toast("删除失败"); }
+}
+
+function openDrawer(panel) {
+  document.getElementById("drawer").classList.add("open");
+  document.getElementById("drawer-scrim").classList.add("active");
+  document.getElementById("drawer").setAttribute("aria-hidden", "false");
+  // 不指定面板时回到上次停留的面板，默认情报台
+  switchPanel(panel || localStorage.getItem("jarvis_last_panel") || "intel");
+}
+function closeDrawer() {
+  document.getElementById("drawer").classList.remove("open");
+  document.getElementById("drawer-scrim").classList.remove("active");
+  document.getElementById("drawer").setAttribute("aria-hidden", "true");
+}
+function switchPanel(panel) {
+  document.querySelectorAll(".dtab").forEach(t =>
+    t.classList.toggle("active", t.dataset.panel === panel));
+  document.querySelectorAll(".dpanel").forEach(p =>
+    p.classList.toggle("active", p.id === "panel-" + panel));
+  localStorage.setItem("jarvis_last_panel", panel);
+  (_panelLoaders[panel] || (() => {}))();
+}
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+
+// 轻提示 + 转义（情报台/定时任务面板共用）
+function toast(m) {
+  const t = document.getElementById("toast");
+  t.textContent = m; t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 2200);
+}
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
 function switchTab(which) {
   document.getElementById("tab-ocr").classList.toggle("active", which === "ocr");
   document.getElementById("tab-manual").classList.toggle("active", which === "manual");
@@ -1202,8 +1456,13 @@ function sendMessage() {
   inputEl.style.height = "38px";
 }
 
-function resetSession() { wsSend({ message: "/reset" }); }
-function showMemory()   { wsSend({ message: "/memory" }); }
+function resetSession() {
+  if (!confirm("重置会清空当前对话历史（含已持久化记录），无法恢复。确定？")) return;
+  wsSend({ message: "/reset" });
+  messagesEl.innerHTML = "";
+  addSystemMessage("会话已重置");
+  closeDrawer();
+}
 
 // ── 代码审查卡片 ───────────────────────────────────────────────────────────
 
@@ -1309,7 +1568,222 @@ inputEl.addEventListener("input", () => {
   inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
 });
 
-connect();
+// 先回放持久化历史，再建立实时连接，保证历史在最上方
+(async () => { await loadHistory(); connect(); })();
+
+// ── 情报台面板：通用卡片仪表盘（消费 /api/intel/dashboard，空卡自动隐藏）──────
+async function runCollect(btn){
+  if(!confirm('将运行「采集今日信号」：联网广扫电子元件/整机行业，把今日信号入库（喂情报台与市场情报日报）。约耗 1–3 分钟，继续？')) return;
+  const old=btn.textContent; btn.textContent='采集中…'; btn.disabled=true;
+  try{
+    const d=await (await fetch('/api/workflows/signal_collection/run',{method:'POST'})).json();
+    const ing=(d.data||{}).ingest||{};
+    if(d.ok){
+      const n=ing.inserted||0, m=ing.merged||0;
+      toast(n||m?('已入库：新增 '+n+'，合并 '+m):'本次未采到新信号（行业平淡或检索受限）');
+    } else {
+      const run=d.run||{};
+      toast('采集结束：'+(run.status||'失败')+(run.failed_at?'（'+run.failed_at+'）':''));
+    }
+    loadIntel();
+  }catch(e){ toast('采集失败'); }
+  finally{ btn.textContent=old; btn.disabled=false; }
+}
+
+async function runProspect(btn){
+  if(!confirm('将运行「今日潜客名单」工作流：会在本机打开 Chrome 并连接 HubSpot（未登录则降级为仅按意向排序）。可能耗时较久，继续？')) return;
+  const old=btn.textContent; btn.textContent='运行中…'; btn.disabled=true;
+  try{
+    const d=await (await fetch('/api/workflows/prospect_daily/run',{method:'POST'})).json();
+    const run=d.run||{};
+    toast(d.ok?'今日名单已生成':('运行结束：'+(run.status||'失败')+(run.failed_at?'（'+run.failed_at+'）':'')));
+    loadIntel();
+  }catch(e){ toast('运行失败'); }
+  finally{ btn.textContent=old; btn.disabled=false; }
+}
+
+async function loadIntel(){
+  const root=document.getElementById('intel-root');
+  try{
+    const d=await (await fetch('/api/intel/dashboard')).json();
+    document.getElementById('intel-date').textContent=d.date||'';
+    root.innerHTML=renderDashboard(d);
+  }catch(e){ root.innerHTML='<div class="muted">加载失败：'+esc(e)+'</div>'; }
+}
+
+const TIER_LABELS=[['action','待办'],['monitor','监控'],['status','状态 / 明细']];
+
+function renderDashboard(d){
+  const tiers=(d&&d.tiers)||{};
+  let html='';
+  for(const [tier,label] of TIER_LABELS){
+    const cards=tiers[tier]||[];
+    if(!cards.length) continue;
+    html+=`<div class="tier"><div class="tier-label">${esc(label)}</div>`;
+    cards.forEach(c=>html+=renderCard(c));
+    html+='</div>';
+  }
+  return html || '<div class="muted">暂无需要关注的内容。</div>';
+}
+
+function renderCard(c){
+  let inner='';
+  if((c.metrics||[]).length){
+    inner+='<div class="cards">'+c.metrics.map(m=>`<div class="mc"><div class="l">${esc(m.label)}</div><div class="v">${esc(m.value)}</div></div>`).join('')+'</div>';
+  }
+  if((c.items||[]).length){
+    inner+='<div class="card">'+c.items.map(renderCardItem).join('')+'</div>';
+  }
+  if(c.note) inner+=`<div class="muted" style="padding:4px 2px">${esc(c.note)}</div>`;
+  return `<div class="sec"><h2>${esc(c.title)}</h2>${inner}</div>`;
+}
+
+function renderCardItem(it){
+  const tone=it.tone?(' tone-'+it.tone):'';
+  const hasBadge=it.badge!==undefined&&it.badge!==null&&it.badge!=='';
+  const badge=hasBadge?`<span class="pill${tone}">${esc(it.badge)}</span>`:(it.tone?`<span class="dot${tone}" style="margin-top:6px"></span>`:'');
+  const url=it.url?`<a class="src" href="${esc(it.url)}" target="_blank" rel="noopener">↗</a>`:'';
+  let actions='';
+  if((it.actions||[]).length){
+    actions='<div class="rev-act">'+it.actions.map((a,i)=>`<button class="${i===0?'btn':'ghost'}" data-act='${esc(JSON.stringify({url:a.url,body:a.body||{}}))}'>${esc(a.label)}</button>`).join('')+'</div>';
+  }
+  const body=actions?`<div style="flex:1"><span class="txt">${esc(it.text)}</span>${actions}</div>`:`<span class="txt">${esc(it.text)}</span>`;
+  return `<div class="item">${badge}${body}${url}</div>`;
+}
+
+// 行内动作（待审核批准/忽略等）：事件委托，避免内联 onclick 的引号问题
+document.addEventListener('click',async(e)=>{
+  const btn=e.target.closest&&e.target.closest('#panel-intel [data-act]');
+  if(!btn) return;
+  let a; try{ a=JSON.parse(btn.getAttribute('data-act')); }catch(_){ return; }
+  try{
+    await fetch(a.url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(a.body||{})});
+    toast('已处理'); loadIntel();
+  }catch(_){ toast('操作失败'); }
+});
+
+const HBCOLOR={ok:'var(--green)',login_in_progress:'var(--yellow)',busy:'var(--yellow)',expired:'var(--red)',failed:'var(--red)',unknown:'var(--text-faint)',closing:'var(--text-faint)'};
+async function hbPost(url,msg){ try{ const d=await (await fetch(url,{method:'POST'})).json(); toast(msg||d.message); return d; }catch(e){ toast('操作失败'); } }
+let _hbPoll=null;
+function hbStartPoll(){ clearInterval(_hbPoll); let n=0; _hbPoll=setInterval(async()=>{ n++; await loadHubspot(); const d=await (await fetch('/api/hubspot/status')).json(); if(d.status==='ok'||d.status==='failed'||n>40) clearInterval(_hbPoll); },3000); }
+async function loadHubspot(){
+  const el=document.getElementById('settings-hubspot');
+  if(!el) return;
+  try{
+    const d=await (await fetch('/api/hubspot/status')).json();
+    el.innerHTML=`<div class="card" style="background:var(--bg-2);border:1px solid var(--border);border-radius:12px;padding:4px 14px"><div class="item" style="display:flex;align-items:center;gap:10px;padding:10px 0">
+      <span class="dot" style="width:8px;height:8px;border-radius:50%;background:${HBCOLOR[d.status]||'var(--text-faint)'}"></span>
+      <span class="txt" style="flex:1;font-size:13px">${esc(d.message)}</span>
+      <button class="btn" id="hb-login">登录</button>
+      <button class="ghost" id="hb-check">检测</button>
+      <button class="ghost" id="hb-close">关闭</button></div></div>`;
+    document.getElementById('hb-login').onclick=async()=>{ await hbPost('/api/hubspot/login','已在本机弹出 Chrome，请完成登录'); hbStartPoll(); };
+    document.getElementById('hb-check').onclick=async()=>{ toast('检测中…'); await hbPost('/api/hubspot/check'); loadHubspot(); };
+    document.getElementById('hb-close').onclick=async()=>{ await hbPost('/api/hubspot/close'); loadHubspot(); };
+  }catch(e){ el.innerHTML='<div class="muted">HubSpot 状态获取失败</div>'; }
+}
+
+// ── 定时任务面板（迁自原 /schedules）─────────────────────────────────────────
+const WEEK = {"1":"周一","2":"周二","3":"周三","4":"周四","5":"周五","6":"周六","0":"周日","7":"周日"};
+function cronToHuman(cron){
+  const p=(cron||"").trim().split(/\s+/);
+  if(p.length!==5) return cron||"—";
+  const [m,h,dom,mon,dow]=p;
+  if(!/^\d+$/.test(m)||!/^\d+$/.test(h)) return cron;
+  const hhmm=h.padStart(2,'0')+":"+m.padStart(2,'0');
+  if(dom==="*"&&mon==="*"&&dow==="*") return "每天 "+hhmm;
+  if(dom==="*"&&mon==="*"&&WEEK[dow]) return WEEK[dow]+" "+hhmm;
+  return cron;
+}
+function cronParts(cron){const p=(cron||"").trim().split(/\s+/); return p.length===5?p:["0","8","*","*","*"];}
+function shortNext(s){const m=String(s).match(/(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/); return m?m[1].slice(5)+' '+m[2]:s;}
+
+async function loadSchedules(){
+  const list=document.getElementById('sched-list');
+  try{
+    const r=await fetch('/api/schedules'); const data=await r.json();
+    if(!data.length){ list.innerHTML='<div class="empty">还没有定时任务。对贾维斯说「每天8点给我推日报」即可创建。</div>'; return; }
+    list.innerHTML='';
+    data.forEach(t=>list.appendChild(schedRow(t)));
+  }catch(e){ list.innerHTML='<div class="err">加载失败：'+esc(e)+'</div>'; }
+}
+
+function schedRow(t){
+  const active = t.status==='active';
+  const wrap=document.createElement('div');
+  const row=document.createElement('div'); row.className='row';
+  row.innerHTML=`
+    <div class="meta">
+      <div class="name">${esc(t.name)}</div>
+      <div class="desc">${esc(t.description||'')}${t.next_run&&t.next_run!=='—'?' · 下次 '+esc(shortNext(t.next_run)):''}</div>
+    </div>
+    <div class="chip ${active?'':'off'}" title="点击修改时间">🕘 ${esc(cronToHuman(t.cron))}</div>
+    <label class="sw"><input type="checkbox" ${active?'checked':''}><span class="track"><span class="knob"></span></span></label>
+    <span class="sched-del" title="删除任务" style="cursor:pointer;color:var(--text-faint);font-size:17px;line-height:1;padding:0 2px">×</span>`;
+  const editor=document.createElement('div'); editor.className='editor';
+  const [m,h,dom,mon,dow]=cronParts(t.cron);
+  editor.innerHTML=`
+    <label>执行时间</label>
+    <div class="erow">
+      <input type="time" value="${h.padStart(2,'0')}:${m.padStart(2,'0')}">
+      <select>
+        <option value="*">每天</option>
+        <option value="1">每周一</option><option value="2">每周二</option><option value="3">每周三</option>
+        <option value="4">每周四</option><option value="5">每周五</option><option value="6">每周六</option><option value="0">每周日</option>
+      </select>
+      <button class="btn save">保存</button>
+      <button class="btn ghost cancel">取消</button>
+    </div>
+    <details class="adv"><summary>高级：直接写 cron</summary>
+      <input type="text" class="rawcron" placeholder="${esc(t.cron)}" value="${esc(t.cron)}">
+    </details>`;
+  editor.querySelector('select').value = (dom==="*"&&mon==="*"&&WEEK[dow]&&dow!=="*")?dow:"*";
+  row.querySelector('.chip').addEventListener('click',()=>editor.classList.toggle('open'));
+  editor.querySelector('.cancel').addEventListener('click',()=>editor.classList.remove('open'));
+  editor.querySelector('.save').addEventListener('click',()=>schedSaveCron(t.name, editor));
+  row.querySelector('input[type=checkbox]').addEventListener('change',e=>schedToggle(t.name, e.target));
+  row.querySelector('.sched-del').addEventListener('click',()=>schedDelete(t.name));
+  wrap.appendChild(row); wrap.appendChild(editor);
+  return wrap;
+}
+
+async function schedDelete(name){
+  if(!confirm(`删除定时任务「${name}」？不可恢复。`)) return;
+  try{
+    const d=await (await fetch(`/api/schedules/${encodeURIComponent(name)}`,{method:'DELETE'})).json();
+    toast(d.message||(d.ok?'已删除':'删除失败'));
+    if(d.ok) loadSchedules();
+  }catch(e){ toast('网络错误'); }
+}
+
+async function schedToggle(name, box){
+  const act = box.checked ? 'resume':'pause';
+  try{
+    const r=await fetch(`/api/schedules/${encodeURIComponent(name)}/${act}`,{method:'POST'});
+    const d=await r.json();
+    if(!d.ok){ box.checked=!box.checked; toast(d.message||'操作失败'); }
+    else toast(box.checked?'已启用':'已暂停');
+  }catch(e){ box.checked=!box.checked; toast('网络错误'); }
+}
+
+async function schedSaveCron(name, editor){
+  let cron;
+  const raw=editor.querySelector('.rawcron').value.trim();
+  const def=editor.querySelector('.rawcron').placeholder;
+  if(raw && raw!==def){ cron=raw; }
+  else{
+    const [hh,mm]=editor.querySelector('input[type=time]').value.split(':');
+    const dow=editor.querySelector('select').value;
+    cron=`${parseInt(mm)} ${parseInt(hh)} * * ${dow}`;
+  }
+  try{
+    const r=await fetch(`/api/schedules/${encodeURIComponent(name)}/cron`,{
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cron})});
+    const d=await r.json();
+    toast(d.message||(d.ok?'已更新':'失败'));
+    if(d.ok){ editor.classList.remove('open'); loadSchedules(); }
+  }catch(e){ toast('网络错误'); }
+}
 
 // ── PWA: 注册 Service Worker（仅在 HTTPS / localhost 下生效）──────────────────
 if ("serviceWorker" in navigator) {

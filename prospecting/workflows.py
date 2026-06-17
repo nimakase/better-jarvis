@@ -80,6 +80,13 @@ def build_prospect_workflow(*, tree_path: str | Path, db_path: str | Path,
     def s_output(ctx):
         return output_fn(ctx)
 
+    def s_mark_done(ctx):
+        # 跑完把本节点标 done 写回树，下次 select 推进到下一个 pending（写 jarvis 自己的树副本）
+        leaf_id = (ctx.get("node") or {}).get("id")
+        if leaf_id:
+            return gen.mark_node_done(tree_path, leaf_id)
+        return False
+
     return [
         wf.Step("select", s_select),
         wf.Step("generate", s_generate, retries=1),
@@ -87,6 +94,7 @@ def build_prospect_workflow(*, tree_path: str | Path, db_path: str | Path,
         wf.Step("preflight", s_preflight, on_error="skip"),   # 预检失败→视为 down，enrich 降级
         wf.Step("enrich", s_enrich),                          # 永不抛：富化或降级
         wf.Step("output", s_output, on_error="skip"),
+        wf.Step("mark_done", s_mark_done, on_error="skip"),   # 推进树；失败不影响已出的名单
     ]
 
 
@@ -175,11 +183,12 @@ def make_llm_generate_fn(prompt_path: str | Path):
         prompt = (template
                   .replace("{{NODE_LABEL}}", node.get("label", ""))
                   .replace("{{REGIONS}}", "、".join(node.get("regions", []))))
-        sc = JarvisController()
+        sc = JarvisController(interactive=False)  # 后台实例：不写用户档案/不自建工具
         text = ""
-        async for chunk in sc.chat(prompt):
-            if not chunk.startswith("\n⚙️"):
-                text += chunk
+        async for ev in sc.chat(prompt):
+            # chat() 现产出结构化事件；只取正文 text（工具进度走 type=="tool"）
+            if isinstance(ev, dict) and ev.get("type") == "text":
+                text += ev["text"]
         # 抽取 JSON 数组
         i, j = text.find("["), text.rfind("]")
         if i >= 0 and j > i:

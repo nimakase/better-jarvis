@@ -28,7 +28,11 @@ from typing import Optional
 from urllib.parse import quote
 
 import config
-from core.registry import tool
+from functools import partial
+from core.registry import tool as _tool
+
+# 本连接器所有工具归入 feishu 组（渐进披露时按需加载）
+tool = partial(_tool, group="feishu")
 
 # ── Token 管理 ────────────────────────────────────────────────────────────────
 

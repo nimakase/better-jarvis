@@ -25,17 +25,52 @@ except Exception:
     _DIR = Path(__file__).resolve().parent / "reports"
 _INDEX = _DIR / "index.json"
 
-# type_id -> {"name": str, "generator": async (**kw)->{"path","title"}}
+# type_id -> {"name", "generator", "description", "when_to_use", "params"}
+#   generator: async (**kw) -> {"path": pdf路径, "title": 标题}
 _TYPES: dict[str, dict] = {}
 
 
 def register_report_type(type_id: str, name: str,
-                         generator: Callable[..., Awaitable[dict]]) -> None:
-    _TYPES[type_id] = {"name": name, "generator": generator}
+                         generator: Callable[..., Awaitable[dict]],
+                         *, description: str = "", when_to_use: str = "",
+                         params: Optional[dict] = None, quick: bool = True) -> None:
+    """注册一种报告类型。
+
+    description / when_to_use / params 让类型自描述、可发现——会被注入 system prompt，
+    让模型知道有哪些报告、各自何时用、要什么参数（解决"不知道做哪种"）。
+
+    quick：是否支持"无参数一键生成"。需用户撰写正文/必填参数才有意义的类型（如 custom）
+    设 False——报告中心不为它出一键按钮（一键点只会产出空壳），它只走对话生成。
+    """
+    _TYPES[type_id] = {
+        "name": name,
+        "generator": generator,
+        "description": description,
+        "when_to_use": when_to_use,
+        "params": params or {},
+        "quick": quick,
+    }
 
 
 def list_types() -> list[dict]:
-    return [{"type": k, "name": v["name"]} for k, v in _TYPES.items()]
+    return [
+        {"type": k, "name": v["name"], "description": v["description"],
+         "when_to_use": v["when_to_use"], "params": v["params"],
+         "quick": v.get("quick", True)}
+        for k, v in _TYPES.items()
+    ]
+
+
+def catalog_block() -> str:
+    """生成注入 system prompt 的报告目录（紧凑、自描述）。空目录返回空串。"""
+    if not _TYPES:
+        return ""
+    lines = ["【可生成的报告类型】（仅在用户明确索取报告时用 generate_report 生成）"]
+    for type_id, v in _TYPES.items():
+        params = "，".join(v["params"].keys()) if v["params"] else "无"
+        when = v["when_to_use"] or v["description"] or ""
+        lines.append(f"- {type_id}（{v['name']}）：{when} 参数：{params}")
+    return "\n".join(lines)
 
 
 def _load_index() -> list:

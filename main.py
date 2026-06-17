@@ -23,16 +23,20 @@ from core.scheduler import get_scheduler, load_all_active_schedules
 from web import pwa, chat
 from web import credentials as web_credentials
 from web import skills as web_skills
-from web import memory as web_memory
+from web import history as web_history
 from web import files as web_files
 from web import schedules as web_schedules
 from web import push as web_push
 from web import intel as web_intel
 from web import hubspot as web_hubspot
 from web import reports as web_reports
+from web import workflows as web_workflows
 
-# 注册工具：导入 tool_builder 即注册元工具；自动发现 connectors/ 下所有连接器（含内置记忆工具）
+# 注册工具：导入 tool_builder 即注册元工具；自动发现 connectors/ 下所有连接器
 registry.discover_connectors()
+
+# 注册工作流（导入即注册：prospect_daily 等）
+from intel import workflow_defs as _workflow_defs  # noqa: F401
 
 # 启动时加载所有已激活的自建技能
 load_all_active_skills()
@@ -59,13 +63,14 @@ app.include_router(pwa.router)
 app.include_router(chat.router)
 app.include_router(web_credentials.router)
 app.include_router(web_skills.router)
-app.include_router(web_memory.router)
+app.include_router(web_history.router)
 app.include_router(web_files.router)
 app.include_router(web_schedules.router)
 app.include_router(web_push.router)
 app.include_router(web_intel.router)
 app.include_router(web_hubspot.router)
 app.include_router(web_reports.router)
+app.include_router(web_workflows.router)
 
 
 # ── 启动 ──────────────────────────────────────────────────────────────────────

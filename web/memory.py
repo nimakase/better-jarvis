@@ -1,24 +1,6 @@
-"""记忆库 REST API 与健康检查。"""
+"""（已移除）记忆库 REST API。
 
-from fastapi import APIRouter
-from fastapi.responses import JSONResponse
-
-from core import memory as mem
-
-router = APIRouter()
-
-
-@router.get("/api/memory")
-async def api_memory():
-    return JSONResponse(mem.list_all())
-
-
-@router.delete("/api/memory/{key}")
-async def api_delete_memory(key: str):
-    mem.delete(key)
-    return {"ok": True}
-
-
-@router.get("/api/health")
-async def health():
-    return {"status": "ok"}
+记忆库功能已下线，对话连续性改由 core/history.py 承担，REST 接口见 web/history.py
+（/api/history、/api/health 等）。本文件已不再被 main.py 装配，可由仓库维护者
+`git rm web/memory.py`。
+"""

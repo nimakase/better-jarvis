@@ -56,11 +56,12 @@ async function load(){
   try{
     const d=await (await fetch('/api/reports')).json();
     gen.innerHTML='';
-    (d.types||[]).forEach(t=>{
+    // 只为"可一键生成"的类型出按钮；需撰写正文的类型（如自定义报告）走对话生成，一键点只会出空壳
+    (d.types||[]).filter(t=>t.quick!==false).forEach(t=>{
       const b=document.createElement('button'); b.textContent='生成「'+t.name+'」';
       b.onclick=()=>generate(t.type, b); gen.appendChild(b);
     });
-    if(!gen.children.length) gen.innerHTML='<span class="muted" style="padding:0">暂无可生成的报告类型</span>';
+    if(!gen.children.length) gen.innerHTML='<span class="muted" style="padding:0">暂无可一键生成的报告类型（自定义报告请直接对贾维斯说）</span>';
     if(!(d.reports||[]).length){ list.innerHTML='<div class="muted">还没有报告。点上面「生成」即可产出第一份。</div>'; return; }
     list.innerHTML='';
     d.reports.forEach(r=>{

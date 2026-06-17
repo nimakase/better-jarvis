@@ -24,7 +24,11 @@ from pathlib import Path
 from typing import Optional
 
 import config
-from core.registry import tool
+from functools import partial
+from core.registry import tool as _tool
+
+# 本连接器所有工具归入 document 组（渐进披露时按需加载）
+tool = partial(_tool, group="document")
 
 # token 安全上限：超过此长度截断并提示
 MAX_CHARS = 120_000  # ~8万 token，留足 context 给其他内容

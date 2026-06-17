@@ -10,8 +10,12 @@
 import json
 from pathlib import Path
 
-from core.registry import tool
+from functools import partial
+from core.registry import tool as _tool
 from connectors import vault
+
+# 本连接器所有工具归入 credentials 组（渐进披露时按需加载；敏感域单独成组）
+tool = partial(_tool, group="credentials")
 from connectors import cred_ocr
 from core.results import ToolResult, Action
 
