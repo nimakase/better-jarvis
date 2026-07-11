@@ -1,13 +1,15 @@
 # 贾维斯（Jarvis）架构文档
 
 > 个人 AI 助理 · 本地优先（local-first）· 可安装 Python 包
-> 更新日期：2026-06-17 · 本次改动：对话持久化 + WS 双通道 + 统一右侧抽屉 + 下线记忆库模型层 + 关闭渐进披露 + 联网自知
+> 更新日期：2026-07-11 · 本次改动：内置日历（时间真源）+ 自我迭代反思闭环（self_review/self_iteration）+ 定时任务预设目录（schedule_presets）+ 文档保险箱 REST（web/documents）+ 部署隧道单一事实源（deploy/）+ 删除已下线模块（memory_tools/feishu/signal_intel/connectors.availability）
 
 ---
 
+> 📌 本文件是架构的**唯一权威**。文档总索引见 `docs/README.md`；代码的核心/周边边界（自我迭代用）以 `core/self_model.py` 为事实源、镜像见 `docs/SELF_MODEL.md`。已废弃文档在 `docs/archive/`。
+
 ## 1. 一句话定位
 
-一个跑在本机的个人 AI 助理：FastAPI + WebSocket 后端，PWA 单页前端（聊天 + 右侧功能抽屉），主控模型走 OpenRouter（DeepSeek V4 Flash，`:online` 联网）。核心能力：**持久化对话历史**（跨刷新/设备回看）、**常驻用户档案 core memory**、证件保险箱、飞书集成、文档读取、模型自建工具、定时任务、**可扩展报告框架**、**卡片化情报台**、**工作流引擎与注册表**（潜客→HubSpot）。高敏感数据（证件真实号码）严格隔离本机，绝不进对话历史/云端。
+一个跑在本机的个人 AI 助理：FastAPI + WebSocket 后端，PWA 单页前端（聊天 + 右侧功能抽屉），主控模型走 OpenRouter（DeepSeek V4 Flash，`:online` 联网）。核心能力：**持久化对话历史**（跨刷新/设备回看）、**常驻用户档案 core memory**、证件保险箱、文档保险箱、文档读取、模型自建工具、定时任务、**可扩展报告框架**、**卡片化情报台**、**工作流引擎与注册表**（潜客→HubSpot）。高敏感数据（证件真实号码）严格隔离本机，绝不进对话历史/云端。
 
 现已是可安装项目（`pip install -e .` / wheel / Docker），配置走 pydantic-settings。
 
@@ -28,6 +30,7 @@
 | 持久化 | SQLite（`memory.db`，单库多表） |
 | 加密 | `cryptography` Fernet，密钥存系统钥匙串（`keyring`） |
 | 定时 | APScheduler（`AsyncIOScheduler`，挂在 FastAPI 事件循环上） |
+| 日历重复 | python-dateutil（`rrule.between` 区间展开重复事件） |
 | 文档解析 | pdfplumber / python-docx / openpyxl / python-pptx（可选依赖） |
 | 本地 OCR | rapidocr-onnxruntime（可选依赖，纯 CPU） |
 | 打包/分发 | setuptools（`pyproject.toml`）+ wheel + Dockerfile |
@@ -51,11 +54,11 @@
 │ web/          │      │ core/             │     │ connectors/       │
 │ 传输层(路由)   │      │ 引擎与基础设施     │     │ 第一方工具(@tool) │
 │              │      │                  │     │                  │
-│ pwa          │      │ registry  ←──────┼─────│ feishu           │
-│ chat (WS)    │─ctx─▶│ context(Session) │     │ document         │
-│ credentials  │      │ controller       │     │ credentials      │
-│ skills       │      │ results          │     │ memory_tools     │
-│ memory       │      │ memory  safety   │     │ vault / cred_ocr │
+│ pwa          │      │ registry  ←──────┼─────│ document         │
+│ chat (WS)    │─ctx─▶│ context(Session) │     │ credentials      │
+│ credentials  │      │ controller       │     │ doc_vault        │
+│ skills       │      │ results          │     │ profile_tools    │
+│ history      │      │ memory  safety   │     │ vault / cred_ocr │
 │ files        │      │ scheduler        │     └──────────────────┘
 └──────────────┘      │ tool_builder ────┼──▶ skills/<名>/tool.py
                       └──────────────────┘     （运行时自建·沙箱·不可信）
@@ -74,13 +77,13 @@
 | 来源 | 位置 | 数量 | 信任级别 |
 |------|------|------|----------|
 | 元工具 | `core/tool_builder.py` | 11 | 第一方（管理系统自身） |
-| 连接器 | `connectors/feishu/document/credentials/signal_intel/delivery/report/availability` | 多组 | 第一方（外部 API / 业务） |
+| 连接器 | `connectors/document/credentials/doc_vault/delivery_control/report` | 多组 | 第一方（外部 API / 业务） |
 | 自建技能 | `skills/<名>/tool.py` | 运行时可变 | **不可信·沙箱** |
 
 > 注：面向模型的「记忆库」工具（`query_memory`/`write_memory`/`list_memory`）已于
 > 2026-06-17 下线（精确 key 命中对 LLM 不友好、盲目注入更多是噪音）；对话连续性改由
-> `core/history.py` 持久化 transcript 承担。`connectors/memory_tools.py` 已中和为空模块、
-> 可 `git rm`。底层加密 KV 存储 `core/memory.py` 仍保留（vault / availability 依赖）。
+> `core/history.py` 持久化 transcript 承担。空壳模块 `connectors/memory_tools.py` 已于
+> 2026-07-11 `git rm` 删除。底层加密 KV 存储 `core/memory.py` 仍保留（vault / availability 依赖）。
 
 - `@tool(name, description, input_schema)`：装饰业务函数即自注册，无需 `TOOL_DEFS`/handler 包装/`register_*` 样板。
 - `ToolSpec`：一个工具的完整描述（名称/说明/schema/handler）。
@@ -96,7 +99,7 @@
 建 `FastAPI(app)`、挂 `app.state.ctx = AppContext()`、`include_router` 装配 `web/` 各路由、`lifespan` 启停调度器。`main()` 用 `config.HOST/PORT` 启动 uvicorn（控制台命令 `jarvis`）。
 
 ### 5.2 `web/` — 传输层路由
-按域拆分的 `APIRouter`：`pwa`、`chat`（`/ws/chat` + 带外动作分发）、`credentials`、`skills`、**`history`**（`/api/history` 回放/清空 + `/api/health`，取代原 `memory` 路由）、`files`、`schedules`、`push`、`intel`、`hubspot`、`reports`。
+按域拆分的 `APIRouter`：`pwa`、`chat`（`/ws/chat` + 带外动作分发）、`credentials`、**`documents`**（`/api/documents` 文档保险箱 CRUD）、`skills`、**`history`**（`/api/history` 回放/清空 + `/api/health`，取代原 `memory` 路由）、`files`、`schedules`、`push`、`intel`、`hubspot`、`reports`、`workflows`、**`calendar`**（`/api/calendar` + `/api/calendar/agenda` 统一时间轴）。
 
 `chat.py` 关键：消费 `controller.chat()` 的结构化事件（text→`chunk` 帧、tool→`tool_status` 帧）；每轮把 user / assistant 文本落盘到 `core/history`（单一主对话 `CONVERSATION_ID`），新控制器内存为空时用历史回灌上下文。客户端用 `localStorage` 持久化 `session_id`（跨标签/设备续聊）。聊天结束 `drain_actions()` → `_dispatch_actions` 分发；文件卡片安全持久化、证件揭示绝不入库。
 
@@ -118,7 +121,7 @@
 
 **联网自知**：`_network_capability_note()` 据 `config.CLAUDE_MODEL` 是否含 `:online` 在 system prompt 里明确告知模型"能/不能联网"，避免模型凭空拒绝或假装联网。
 
-**工具按域渐进披露（step7，现已默认关，`config.PROGRESSIVE_TOOLS` / `JARVIS_PROGRESSIVE_TOOLS=1` 开启）**：关闭时每轮把全部工具暴露给模型，行为简单可预测、不会在对话里冒出 `load_tools` 工具清单（这正是之前用户看到"一长串列表"的来源）。开启时才走「核心常驻工具 ∪ 已激活领域 + `load_tools` 元工具」的按需加载，`get_exposed_tools()` 关闭时逐字等价 `get_all_tools()`。机制代码保留，待来日在真实小模型上单独 A/B 再议。
+**工具按域渐进披露（现已默认【开】，`config.PROGRESSIVE_TOOLS` / `JARVIS_PROGRESSIVE_TOOLS=0` 关闭）**：开启时每轮只暴露「核心常驻工具（`CORE_TOOL_NAMES`：发文件/记事实/读文件/查两个保险箱）∪ 已激活领域 + `load_tools` 元工具」，其余领域工具靠模型调 `load_tools(group=…)` 按需加载——工具层重构后（29 工具 / 9 个清晰分组）小模型路由更准。`load_tools` 的描述动态列出尚未加载的领域及其工具；模型若直接调用某未暴露工具，其 handler 仍在全量注册表里照常执行，并自动激活该组（纯加法、不破坏调用）。关闭时 `get_exposed_tools()` 逐字等价 `get_all_tools()`（每轮全量），为向后兼容保留。
 
 ### 5.7 `core/memory.py` — 加密 KV 存储 + 共享基础设施
 SQLite `memory` + `snapshots` 两表；Fernet 加密；密钥存系统钥匙串。**2026-06-17 起其角色变为纯基础设施**：面向模型的记忆库工具已下线，`build_context_block()` 不再注入 system prompt。但本模块的 `encrypt`/`decrypt`/`_get_conn`/`_fernet_instance` 仍被**证件保险箱 `vault`、`availability` 以及新的 `core/history.py` 复用**（共用同一个 `memory.db`、各自独立表），不可删除。
@@ -136,10 +139,31 @@ MemGPT/Letta 式 "core memory" 的轻量单用户版：一小块【每轮注入 
 模型运行时"写工具给自己用"。`create_tool`/`edit_tool` 调模型生成代码 → `validate_tool_code`（AST 沙箱：禁危险 import、查可疑模式、SQL 注入提示）→ 存草稿 → 前端审查（`code_review` 动作）→ 激活动态加载注册。元工具（建/改/删工具、定时任务、`send_file_to_chat`）在模块导入时自注册。`load_all_active_skills` 已加固：坏 `meta.json` 跳过告警而非崩溃。
 
 ### 5.10 `core/scheduler.py` — 定时任务
-APScheduler；任务存 `schedules/<名>/config.json`；触发时用独立 `JarvisController` 执行，结果经飞书或本地文件投递。
+APScheduler；任务存 `schedules/<名>/config.json`；触发时用独立 `JarvisController` 执行，结果写入本地文件投递。
 
 ### 5.11 `connectors/` — 第一方工具（全部 `@tool`）
-`feishu`（日历/消息 4 个）、`document`（`read_document`）、`credentials`（证件 5 个）、`memory_tools`（记忆 3 个）；`vault`（证件加密存储核心）、`cred_ocr`（本地 OCR）为被调用的非工具助手。
+`document`（`read_document`）、`credentials`（证件 5 个）、`doc_vault`（文档保险箱）、`profile_tools`（`remember_fact` 写用户档案）、`calendar_tools`（内置日历建/读/改/删，group=`calendar`）、`self_review_tools`（`run_self_review` 触发自我迭代反思，group=`self`）；`vault`（证件加密存储核心）、`cred_ocr`（本地 OCR）、`calendar_providers`（派生来源 provider，导入即注册）、`calendar_card`（近期日程情报卡）为被调用的非工具助手/注册模块。
+
+### 5.13 自我认知：`core/self_model.py` + `connectors/self_inspect.py`（新增）
+
+让贾维斯「读得到自己」。`core/self_model.py` 是**代码边界的单一事实源**：把所有源码划为 🔒核心 PROTECTED（框架与安全不变量，不自动迭代；要改须人工 + 影响 + 动机）与 🟢周边 OPEN（业务能力，可自我迭代）。三条不变量焊死在内：未列入 OPEN 的一切默认按 PROTECTED 处理（fail-safe，新文件天生受保护）；`tests/` 受保护（测试是「绿了就自动生效」的安全网，禁止自改作弊）；`self_model.py` 自身受保护（不能偷挪护栏）。`classify(path)` / `is_writable_by_self_iteration(path)` 供后续自迭代闭环判定。镜像见 `docs/SELF_MODEL.md`。
+
+`connectors/self_inspect.py` 暴露两个**只读**第一方工具（group=`self`）：`list_self_modules`（列模块地图 + 分区 + 行数）、`read_self_source`（按边界读源码并标注归属）。纯只读、有仓库围栏（`under_base`）、拒读密钥/运行态（`.env`、`data/`、`.git` 等）。
+
+### 5.14 自我迭代闭环：`core/self_iteration.py` + `core/self_review.py`（🔒 受保护）
+
+在「读得到自己」之上再让贾维斯「安全地改自己」。二者均属 PROTECTED（自身不可自改，否则可拆掉自己的护栏）。
+
+- `core/self_iteration.py`（执行器）：把一条**已生成**的优化提案安全落地——区位判定 → 文件快照 → **先红后绿**验证（新测试改前必失败、改后必通过，挡空测试）→ **全量 gate**（`run_all` 必过，挡改坏别处）→ 通过则保留(+git 提交)、任一步失败精确回滚。安全靠机械护栏：只写 OPEN 路径，PROTECTED 物理拒写；自动测试只能新建 `test_auto_*.py`、绝不覆盖既有测试。生成（调 LLM）刻意留在上层，核心机制可确定性单测。
+- `core/self_review.py`（反思编排）：读上轮复盘 → 构建反思 prompt → 调模型生成提案 → 按区位路由（OPEN 交执行器自动落地；PROTECTED 生成 `code_review` 提案送人工审）→ 写本轮复盘（下轮先读）。LLM 经 `model_fn` 注入，编排可脱离真实模型单测。触发经 `connectors/self_review_tools.py` 的 `run_self_review` 工具（有副作用，仅用户显式或定时触发，且先告知）。
+
+### 5.15 `core/calendar.py` — 内置日历（时间真源，🟢 周边）
+
+系统的**单一时间事实源**（设计见根目录《内置日历设计.md》）。一张可扩展事件表 `calendar_events`（`kind` + `meta` JSON 袋 → 新事件种类零迁移；`rrule` 字段 → 重复事件为第一类公民，走 `dateutil.rrule.between` 区间展开）。真源 vs 派生：用户事件/休假/一次性提醒入表；证件保单到期、定时任务下次运行等不入表，由各 `register_source(name, fn)` 注册的 provider（`calendar_providers.py`：证件到期/文档到期/定时下次/档案关键日）**读时现算**。`agenda(start, end)` 合并两者出一条排好序的时间轴。存同一 `memory.db`（独立表），与 history/profile/vault 同构。REST 见 `web/calendar.py`，情报卡见 `calendar_card.py`。
+
+### 5.16 `core/schedule_presets.py` — 定时任务预设目录
+
+前端可视化启动用的「可启动任务」纯数据目录（`PRESETS`）：每条含标题、说明、默认 cron、以及**服务端预置的 prompt**（不经前端，避免提示词注入）。前端列预设卡 + 频率选择器，一键 `create_from_preset` 即按所选 cron 复用 `core.scheduler` 建真实定时任务。新增可启动任务 = 往 `PRESETS` 加一条。
 
 ### 5.12 `config.py` — 配置
 `Settings(BaseSettings)` 承载 env/`.env`（密钥、模型、对话参数、`JARVIS_HOST/PORT`），带类型与校验；模块级大写常量向后兼容导出。路径常量（`DATA_DIR`/`FRONTEND_DIR`/`UPLOAD_DIR`/`DOWNLOAD_DIR` 等）按平台推导。
@@ -213,6 +237,8 @@ APScheduler；任务存 `schedules/<名>/config.json`；触发时用独立 `Jarv
 | 情报台卡片 | `core/intel_cards` | 仪表盘卡片 provider | `/api/intel/dashboard` |
 | 工作流 | `core/workflow_registry` | 多步骤工作流 | `run_workflow` 工具 / `/api/workflows` / 调度 |
 | 用户档案 | `core/profile` | 长期硬事实 | 每轮注入 system prompt |
+| 日历来源 | `core/calendar` | `register_source` 派生来源 | `agenda()` / `/api/calendar/agenda` |
+| 定时预设 | `core/schedule_presets` | 可启动任务预设 | 前端预设卡 / `create_from_preset` |
 
 新增一项能力 = 注册一条，前端/模型零散逻辑不外溢；其中报告/工作流/卡片的目录都会注入 system prompt 让模型可发现。
 
@@ -227,11 +253,11 @@ APScheduler；任务存 `schedules/<名>/config.json`；触发时用独立 `Jarv
 - **工作记忆** `controller.messages`（含 `_compress_history` 压缩）。
 - **持久 transcript** `core/history.py`：落盘 + 回放 + 新会话回灌，跨刷新/设备续聊。
 - **core memory** `core/profile.py`：少量长期硬事实，每轮钉进 system prompt，不随历史淡化。
-- 旧的 key-value「记忆库」工具已下线（`memory_tools` 中和）；`core/memory.py` 降级为加密存储基础设施（vault / history / profile 共用）。
+- 旧的 key-value「记忆库」工具已下线（`memory_tools` 空壳已 `git rm`）；`core/memory.py` 降级为加密存储基础设施（vault / history / profile / calendar 共用同一 `memory.db`、各自独立表）。
 
 ### 10.4 工作流范式
 
-`core/workflow.py`（引擎：有序 Step + 共享 ctx + abort/skip/degrade + 重试 + 可观测 `WorkflowRun`）＋ `core/workflow_registry.py`（注册/运行/落盘运行记录）。旗舰 `prospect_daily`（`intel/workflow_defs.py`）：选节点→联网生成→接意向信号→**HubSpot 富化**（`pipeline.enrich_records` + matcher，登录失效则降级仅按意向排序）→排序→出富 xlsx + 落「今日名单」喂情报台卡。
+`core/workflow.py`（引擎：有序 Step + 共享 ctx + abort/skip/degrade + 重试 + 可观测 `WorkflowRun`）＋ `core/workflow_registry.py`（注册/运行/落盘运行记录）。旗舰 `prospect_daily`（`intel/workflow_defs.py`）：**信号新鲜度自检**（`signal_check`：信号库最近采集超过 `config.SIGNAL_FRESHNESS_DAYS`＝7 天即视为过期，**不阻断**、只在推送文本/xlsx 顶部红字/情报台卡三处标注「意向排序仅供参考」）→选节点→联网生成→接意向信号→**HubSpot 富化**（`pipeline.enrich_records` + matcher，登录失效则降级仅按意向排序）→排序→出富 xlsx + 落「今日名单」喂情报台卡。信号对潜客是**可选增强**而非硬依赖：信号缺失/过期仍照常出名单，仅意向打分退化为基线。
 
 **触发纪律**（system prompt 政策 + 工具描述双重约束）：报告与工作流**默认不做**，只在用户显式索取或定时触发；有副作用的工作流（开浏览器/连 HubSpot）**跑前先告知并确认**；不明确先问。UI 触发（情报台"运行潜客名单"按钮、报告中心生成按钮）等同显式动作。
 

@@ -1,12 +1,14 @@
 """
-intel 工作流声明 —— 把信号库/生成/富化/投递拼成两条声明式工作流。
+潜客工作流声明 —— 把信号库/生成/富化/投递拼成声明式 prospect 轨。
 
-  report 轨    ：render(读信号库渲染日报) → deliver        （不依赖 matcher）
-  prospect 轨  ：select → generate(LLM) → assemble(接意向) → preflight
-                 → enrich(matcher，登录挂则降级出 pending) → output(写表+投递)
+  prospect 轨：signal_check(信号新鲜度自检) → select → generate(LLM) → assemble(接意向)
+               → preflight → enrich(matcher，登录挂则降级出 pending) → output(写表+投递)
 
 确定性步骤 + 降级逻辑已用 mock 测通；LLM 步(generate)与浏览器步(preflight/match)
 由生产侧注入（运行时才有 agent / 已登录会话），见下方 make_* 工厂。
+
+market_intel 日报【不在这里】——走报告框架（core/reports + report_tools），见模块中部说明。
+这些步骤都是内部函数，模型侧只通过 run_workflow(prospect_daily) 触发，不单独暴露成工具。
 
 契约见 intel/prospect_pipeline_contract.md、intel/delivery_and_resilience_spec.md。
 """
@@ -51,6 +53,23 @@ def build_prospect_workflow(*, tree_path: str | Path, db_path: str | Path,
     match_fn(name,dom) -> {"status","owner",...}（见 make_hubspot_runtime）
     output_fn(ctx)     -> 写富 xlsx + 投递（见 make_output_fn）
     """
+    def s_signal_check(ctx):
+        """信号新鲜度自检：算出离上次采集多少天、是否过期，存入 ctx 供 output 标注。
+        永不抛错（on_error=skip 兜底）；过期不阻断，只标注。"""
+        import config
+        from datetime import date
+        thresh = getattr(config, "SIGNAL_FRESHNESS_DAYS", 7)
+        latest = sl.latest_collected_date(db_path=db_path)
+        age = None
+        if latest:
+            try:
+                age = (date.today() - date.fromisoformat(latest)).days
+            except Exception:
+                age = None
+        ctx["signal_age_days"] = age
+        ctx["signal_stale"] = (age is None) or (age > thresh)
+        return {"latest": latest, "age_days": age, "stale": ctx["signal_stale"], "threshold": thresh}
+
     def s_select(ctx):
         node = gen.select_node(tree_path)
         if node is None:
@@ -88,6 +107,7 @@ def build_prospect_workflow(*, tree_path: str | Path, db_path: str | Path,
         return False
 
     return [
+        wf.Step("signal_check", s_signal_check, on_error="skip"),  # 新鲜度自检：过期只标注不阻断
         wf.Step("select", s_select),
         wf.Step("generate", s_generate, retries=1),
         wf.Step("assemble", s_assemble),
@@ -98,24 +118,9 @@ def build_prospect_workflow(*, tree_path: str | Path, db_path: str | Path,
     ]
 
 
-# ────────────────────────── 工作流：日报轨 ──────────────────────────
-
-def build_report_workflow(*, db_path: str | Path,
-                          render_fn: Callable[[dict], str],
-                          output_fn: Callable[[dict], object],
-                          days: int = 14) -> list[wf.Step]:
-    """日报轨：读信号库渲染 → 投递。完全不依赖 matcher。"""
-    def s_render(ctx):
-        ctx["grouped"] = sl.query_report(db_path=db_path, days=days)
-        return render_fn(ctx)
-
-    def s_output(ctx):
-        return output_fn(ctx)
-
-    return [
-        wf.Step("render", s_render),
-        wf.Step("deliver", s_output, on_error="skip"),
-    ]
+# 注：市场情报日报【不走工作流】——它由报告框架（core/reports + connectors/report_tools
+# 的 market_intel 报告类型，渲染见 intel/report.py）承担。此前这里有个 build_report_workflow
+# 是历史遗留的死代码（从未注册），已删除，以免与报告框架重复、造成"日报到底走哪条"的混淆。
 
 
 # ────────────────────────── 生产侧注入工厂（运行时） ──────────────────────────
@@ -124,6 +129,15 @@ def make_output_fn(out_dir: str | Path, track: str, title: str):
     """返回 output_fn：写富 xlsx（潜客轨）或直接取文本（日报轨）+ 过投递闸门推送。"""
     def output_fn(ctx) -> dict:
         degraded = bool(ctx.get("hubspot_degraded")) or (ctx.get("hubspot_ok") is False)
+        stale = bool(ctx.get("signal_stale"))
+        age = ctx.get("signal_age_days")
+        # 收集标注语（HubSpot 降级 / 信号过期），同时用于推送文本与 xlsx 顶部 banner
+        notes: list[str] = []
+        if degraded:
+            notes.append("本批未做 HubSpot 匹配，恢复后可一键补匹配")
+        if stale:
+            notes.append("信号库为空，意向排序仅按基线，仅供参考" if age is None
+                         else f"信号已 {age} 天未更新，意向排序仅供参考")
         records = ctx.get("enrich")
         path = None
         if records is not None:
@@ -131,13 +145,15 @@ def make_output_fn(out_dir: str | Path, track: str, title: str):
             node_id = (ctx.get("node") or {}).get("id", "list")
             from datetime import date
             path = str(Path(out_dir) / f"prospects_{node_id}_{date.today().isoformat()}.xlsx")
-            pl.write_xlsx(records, path)
-            banner = "（本批未做 HubSpot 匹配，恢复后可一键补匹配）" if degraded else ""
+            pl.write_xlsx(records, path, banner=("⚠ " + "；".join(notes)) if notes else None)
+            banner = f"（{'；'.join(notes)}）" if notes else ""
             content = f"潜客清单已生成：{len(records)} 家{banner}\n文件：{path}"
         else:
             content = ctx.get("render") or ""
         res = delivery.deliver(track, title, content, severity="normal")
-        return {"path": path, "degraded": degraded, "delivered": res.get("delivered"), "reason": res.get("reason")}
+        return {"path": path, "degraded": degraded,
+                "signal_stale": stale, "signal_age_days": age,
+                "delivered": res.get("delivered"), "reason": res.get("reason")}
     return output_fn
 
 

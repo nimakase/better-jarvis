@@ -37,7 +37,7 @@ CASES = [
          expected_tools=["intel_scan"]),            # ⚠️ TODO 确认名
     dict(id="domain-delivery-1", category="domain",
          prompt="以后我休假期间日报和潜客都先别推。",
-         expected_tools=["availability_set_default"]),  # ⚠️ TODO 确认名
+         expected_tools=["delivery_vacation_default"]),
     dict(id="domain-report-1", category="domain",
          prompt="生成一份本周的报告。",
          expected_tools=["generate_report"]),       # ⚠️ TODO 确认名

@@ -36,6 +36,8 @@ def _store_today_prospects(records: list, res: dict) -> None:
         "date": date.today().isoformat(),
         "count": len(records or []),
         "degraded": bool((res or {}).get("degraded")),
+        "signal_stale": bool((res or {}).get("signal_stale")),
+        "signal_age_days": (res or {}).get("signal_age_days"),
         "xlsx_path": (res or {}).get("path"),
         "items": items,
     }

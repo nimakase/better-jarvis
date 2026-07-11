@@ -23,6 +23,8 @@ dependencies = [
     "apscheduler>=3.10.0",
     "python-multipart>=0.0.9",
     "pydantic-settings>=2.0.0",
+    "python-dateutil>=2.8.0",   # 内置日历 rrule 展开（core/calendar.py、connectors/calendar_providers.py）
+    "pywebpush>=1.14.0",        # 默认交付渠道 webpush（core/delivery.py、web/push.py，缺失会优雅降级）
 ]
 
 [project.optional-dependencies]
@@ -33,9 +35,22 @@ documents = [
     "openpyxl>=3.1.0",
     "python-pptx>=0.6.23",
 ]
-# 本机证件 OCR
+# 本机证件 OCR（connectors/cred_ocr.py 直接 import cv2/numpy，显式声明以免只靠传递依赖）
 ocr = [
     "rapidocr-onnxruntime>=1.3.0",
+    "opencv-python>=4.5.1.48",
+    "numpy>=1.19.5",
+]
+# 潜客挖掘流程（prospecting/*，惰性引入；hubspot_worker 顶层依赖 pandas + playwright）
+prospecting = [
+    "pandas>=2.0.0",
+    "playwright>=1.40.0",
+    "openpyxl>=3.1.0",
+]
+# 市场情报 PDF 日报（market_intel_report 技能用）。装完 python 包后还需一次性下浏览器：
+#   playwright install chromium
+reports = [
+    "playwright>=1.40.0",
 ]
 # 全部可选依赖
 all = [
@@ -44,6 +59,10 @@ all = [
     "openpyxl>=3.1.0",
     "python-pptx>=0.6.23",
     "rapidocr-onnxruntime>=1.3.0",
+    "opencv-python>=4.5.1.48",
+    "numpy>=1.19.5",
+    "pandas>=2.0.0",
+    "playwright>=1.40.0",
 ]
 
 [project.scripts]

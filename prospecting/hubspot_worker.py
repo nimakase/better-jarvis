@@ -446,8 +446,10 @@ Object.defineProperty(navigator, 'webdriver', {
             try:
                 if obj is not None:
                     obj.close() if hasattr(obj, "close") else obj.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                # 关闭失败可能泄漏浏览器进程；记一条但继续关其余对象
+                self.logger.warning("关闭 %s 失败（可能泄漏进程）：%s",
+                                    type(obj).__name__, e)
         self.page = None
         self.context = None
         self.playwright = None

@@ -1,0 +1,17 @@
+# 贾维斯 Cloudflare Tunnel 配置（与项目绑定，单一事实来源）
+# 用法见 deploy/README.md。凭证 json 是密钥，仍放在 ~/.cloudflared/ 下，这里只引用其绝对路径。
+
+tunnel: daa886d2-8350-4e29-9a50-ef0cb27d21e4
+credentials-file: /Users/grace/.cloudflared/daa886d2-8350-4e29-9a50-ef0cb27d21e4.json
+
+# ── 稳定性硬化（长期当服务器跑）──────────────────────────────
+protocol: http2          # 走 TCP 443，避免家用网络掐 UDP 导致 QUIC 反复重连
+edge-ip-version: "4"     # 锁 IPv4 边缘，绕开不稳的 IPv6 链路（新版 cloudflared 要求字符串）
+retries: 5
+grace-period: 30s
+
+# ── 路由 ────────────────────────────────────────────────────
+ingress:
+  - hostname: jarvis.hks0110.com
+    service: http://127.0.0.1:8000
+  - service: http_status:404

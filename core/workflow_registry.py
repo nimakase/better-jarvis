@@ -20,11 +20,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
 from core import workflow as wf
+
+logger = logging.getLogger("jarvis.workflow_registry")
 
 try:
     import config
@@ -129,8 +132,10 @@ async def run(wf_id: str, **kwargs) -> dict:
         if cleanup:
             try:
                 cleanup()
-            except Exception:
-                pass
+            except Exception as e:
+                # cleanup 通常关浏览器/CRM 会话，吞掉会泄漏进程/资源
+                logger.warning("工作流 %s 收尾 cleanup 失败（可能泄漏浏览器/会话）：%s",
+                               spec.get("name", "?"), e)
 
     rec = {
         "id": wf_id, "name": spec["name"], "status": wrun.status,

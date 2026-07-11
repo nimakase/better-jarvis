@@ -14,7 +14,7 @@ from functools import partial
 from core.registry import tool as _tool
 from core import reports as _reports
 
-tool = partial(_tool, group="report")
+tool = partial(_tool, group="reports")
 
 
 # ── 类型 1：市场情报日报（固定模板，信号库真数据；主要靠定时自动出）──

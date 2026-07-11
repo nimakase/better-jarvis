@@ -26,6 +26,9 @@ PROTECTED: dict[str, str] = {
     # 边界与安全网自身
     "core/self_model.py":     "边界定义自身；移动边界 = 拆护栏，必须人工",
     "core/self_iteration.py": "自我迭代执行器；若可自改即可拆掉自己的护栏，必须人工",
+    "core/self_review.py":    "反思闭环编排；自改即可绕过路由/送审，必须人工",
+    "connectors/self_inspect.py":      "只读自省工具；改它=改自我认知入口，须人工",
+    "connectors/self_review_tools.py": "反思触发工具；同上",
     "tests/":                 "测试是自动生效的安全网；若可自改即可作弊，必须人工",
     # 框架与装配
     "config.py":            "配置与密钥载入",
@@ -59,7 +62,6 @@ OPEN: dict[str, str] = {
     "connectors/report_tools.py":       "报告工具",
     "connectors/workflow_tools.py":     "工作流工具",
     "connectors/delivery_control.py":   "投递控制",
-    "connectors/memory_tools.py":       "（已中和的空模块）",
     # 业务逻辑层（core 里偏内容的）
     "core/reports.py":          "报告类型注册",
     "core/report_render.py":    "报告渲染",

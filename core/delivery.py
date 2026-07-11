@@ -2,12 +2,12 @@
 投递服务（Delivery service）—— 跨任务复用的横切层。
 
 职责：
-  - 多渠道：feishu / file / email / webpush（发送函数可注册/注入）
+  - 多渠道：file / email / webpush（发送函数可注册/注入）
   - 闸门：按「轨道暂停态 + 休假区间」决定今天是否投递
   - 分级路由：按严重度把内容送到不同渠道
 
 设计契约见 intel/delivery_and_resilience_spec.md。
-新增层，纯标准库；现有 scheduler 的 feishu/file 行为可平移到这里，老路径不受影响。
+新增层，纯标准库；现有 scheduler 的 file 行为可平移到这里，老路径不受影响。
 """
 from __future__ import annotations
 
@@ -24,8 +24,8 @@ except Exception:
 
 # 严重度 → 默认渠道（可被 deliver() 的 routing 参数覆盖）
 SEVERITY_CHANNELS = {
-    "normal": ["webpush"],            # 日常交付（日报就绪、清单就绪）
-    "high":   ["webpush", "feishu"],  # 高级别（登录过期、改版、配置错）
+    "normal": ["webpush"],  # 日常交付（日报就绪、清单就绪）
+    "high":   ["webpush"],  # 高级别（登录过期、改版、配置错）
 }
 
 ChannelFn = Callable[[str, str], object]  # (title, content) -> 任意
@@ -82,24 +82,50 @@ def all_status(state_path: str | Path = _STATE_PATH) -> dict:
 
 # ────────────────────────── 休假区间 ──────────────────────────
 
+# 阶段 4 起，休假的真源迁到内置日历（kind=rest 事件）；以下函数改为薄壳委托日历，
+# 签名不变（state_path 保留兼容，对休假已无意义）。delivery_state.json 的 rest_periods
+# 仅作迁移前的历史载体，迁移后置空（见 migrate_rest_to_calendar）。
+
 def add_rest_period(start: str, end: str, reason: str = "休假",
                     state_path: str | Path = _STATE_PATH) -> list:
-    """登记一段休假（含首尾），期间默认两轨都不投递。
-
-    带 id + confirmed 字段：confirmed 仅供「主动确认」用，不影响闸门（闸门只看 start/end）。
-    """
-    import uuid
-    s = _load(state_path)
-    s["rest_periods"].append({"id": uuid.uuid4().hex[:8], "start": start, "end": end,
-                              "reason": reason, "confirmed": False})
-    _save(s, state_path)
-    return s["rest_periods"]
+    """登记一段休假（含首尾），期间默认两轨都不投递。底层＝日历 rest 事件。"""
+    from core import calendar as _cal
+    _cal.add_rest(start, end, reason)
+    return _cal.list_rests()
 
 
 def clear_rest_periods(state_path: str | Path = _STATE_PATH) -> None:
+    from core import calendar as _cal
+    _cal.clear_rests()
+
+
+def list_rest_periods(state_path: str | Path = _STATE_PATH) -> list:
+    """列出休假（来自日历），形状对齐旧 rest_periods。"""
+    from core import calendar as _cal
+    return _cal.list_rests()
+
+
+def migrate_rest_to_calendar(state_path: str | Path = _STATE_PATH) -> int:
+    """一次性迁移：把 delivery_state.json 的旧 rest_periods 搬成日历 rest 事件，
+    随后置空旧字段（幂等：迁移后源为空，再调用为 no-op）。返回迁移条数。"""
+    from core import calendar as _cal
     s = _load(state_path)
-    s["rest_periods"] = []
+    old = s.get("rest_periods") or []
+    if not old:
+        return 0
+    existing = {(r["start"], r["end"]) for r in _cal.list_rests()}
+    moved = 0
+    for rp in old:
+        key = (str(rp.get("start"))[:10], str(rp.get("end"))[:10])
+        if key in existing:
+            continue  # 去重，防重复迁移
+        ev = _cal.add_rest(rp.get("start"), rp.get("end"), rp.get("reason", "休假"))
+        if rp.get("confirmed") and ev.get("event"):
+            _cal.confirm_rest(ev["event"]["id"])
+        moved += 1
+    s["rest_periods"] = []  # 置空旧字段，真源已转移到日历
     _save(s, state_path)
+    return moved
 
 
 # ────────────────────────── 闸门 ──────────────────────────
@@ -110,13 +136,11 @@ def is_paused(track: str, as_of: Optional[str] = None,
     today = date.fromisoformat(as_of) if as_of else date.today()
     s = _load(state_path)
 
-    # 休假区间（对所有轨道生效）
-    for rp in s.get("rest_periods", []):
-        try:
-            if date.fromisoformat(rp["start"]) <= today <= date.fromisoformat(rp["end"]):
-                return True, f"休假中（{rp.get('reason','')}）"
-        except Exception:
-            continue
+    # 休假区间（对所有轨道生效）——真源在内置日历（kind=rest 事件）
+    from core import calendar as _cal
+    rp = _cal.active_rest(today.isoformat())
+    if rp:
+        return True, f"休假中（{rp.get('reason', '')}）"
 
     # 单轨暂停
     t = s["tracks"].get(track)
@@ -140,7 +164,7 @@ _CHANNELS: dict[str, ChannelFn] = {}
 
 
 def register_channel(name: str, fn: ChannelFn) -> None:
-    """生产侧注册真实发送函数（feishu / webpush / file / email）。"""
+    """生产侧注册真实发送函数（webpush / file / email）。"""
     _CHANNELS[name] = fn
 
 

@@ -17,13 +17,14 @@ from core import profile
 from core import registry
 from core import reports as _reports
 from core import workflow_registry as _workflows
+from core import calendar as _calendar
 from core.results import ToolResult
 # 向后兼容：连接器/技能仍可 `from core.controller import register_tool`
 from core.registry import register_tool
 
 # ── System Prompt ─────────────────────────────────────────────────────────────
 
-FIXED_SYSTEM_PROMPT = """你是贾维斯，Ned 的个人 AI 助理。你的职责是处理日程、保险、投资、飞书沟通等日常事务。
+FIXED_SYSTEM_PROMPT = """你是贾维斯，Ned 的个人 AI 助理。你的职责是处理保险、投资、文档、情报等日常事务。
 
 【人格】
 - 简洁直接，不废话，不重复用户说过的话
@@ -109,6 +110,10 @@ def _build_system_prompt() -> str:
     block = profile.build_block()
     if block:
         parts.append(block)
+    # 近期日程（内置日历，时间真源）：将到事件 + 休假 + 临近到期 + 今日定时，每轮注入
+    cal_block = _calendar.build_block()
+    if cal_block:
+        parts.append(cal_block)
     # 报告目录：让模型知道有哪些报告类型、何时用、要什么参数（配合上面的报告政策）
     catalog = _reports.catalog_block()
     if catalog:
@@ -267,7 +272,7 @@ class JarvisController:
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "group": {"type": "string", "description": "要加载的领域分组名，如 signal_intel / delivery / report"}
+                    "group": {"type": "string", "description": "要加载的领域分组名，如 credentials / delivery / scheduling"}
                 },
                 "required": ["group"],
             },

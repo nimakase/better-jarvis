@@ -56,6 +56,10 @@ async def _card_today_prospects() -> dict:
     note = f'{data.get("date", "")} · 共 {data.get("count", 0)} 家'
     if data.get("degraded"):
         note += "（未匹配 HubSpot，仅按意向排序；登录后重跑可补匹配）"
+    if data.get("signal_stale"):
+        age = data.get("signal_age_days")
+        note += ("（信号库为空，意向排序仅供参考）" if age is None
+                 else f"（信号已 {age} 天未更新，意向排序仅供参考）")
     return {"has_content": True, "urgency": "high", "items": items, "note": note}
 
 
