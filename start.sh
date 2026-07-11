@@ -9,8 +9,8 @@ if [ ! -f .env ]; then
     exit 1
 fi
 
-# 安装依赖（首次运行）
-if ! python -c "import anthropic" 2>/dev/null; then
+# 安装依赖（首次运行；用项目实际依赖 openai 做探测，装过就跳过）
+if ! python -c "import openai" 2>/dev/null; then
     echo "安装依赖..."
     pip install -r requirements.txt
 fi

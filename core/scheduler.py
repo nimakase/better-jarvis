@@ -5,7 +5,7 @@
   - APScheduler AsyncIOScheduler 挂在 FastAPI 事件循环内
   - 每个任务存在 schedules/<name>/config.json
   - 触发时创建独立 JarvisController 实例执行，不污染用户对话历史
-  - 结果通过飞书推送或写入本地文件
+  - 结果写入本地文件
 
 config.json 格式：
 {
@@ -15,9 +15,7 @@ config.json 格式：
     "cron": "0 8 * * *",             // 标准 cron 表达式
     "prompt": "搜索今日电子元器件...",  // 发给贾维斯的指令
     "delivery": {
-        "type": "feishu",            // feishu | file
-        "receive_id": "xxx",         // 飞书接收方 ID（type=feishu 时必填）
-        "receive_id_type": "open_id" // open_id | user_id | chat_id
+        "type": "file"               // 目前仅支持本地文件
     },
     "created_at": "2026-06-13T..."
 }
@@ -88,26 +86,13 @@ async def _run_job(name: str, prompt: str, delivery: dict, track: str = ""):
 
 
 async def _deliver(name: str, content: str, delivery: dict):
-    """推送结果到指定渠道。"""
-    delivery_type = delivery.get("type", "file")
-
-    if delivery_type == "feishu":
-        from connectors.feishu import send_feishu_message
-        receive_id = delivery.get("receive_id", "")
-        receive_id_type = delivery.get("receive_id_type", "open_id")
-        if not receive_id:
-            logger.error(f"任务 {name}：飞书 receive_id 未配置")
-            return
-        header = f"📋 【{name}】定时报告\n{datetime.now().strftime('%Y-%m-%d %H:%M')}\n{'─' * 30}\n"
-        await send_feishu_message(receive_id, header + content, receive_id_type)
-
-    elif delivery_type == "file":
-        report_dir = Path.home() / "jarvis_data" / "reports"
-        report_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"{name}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
-        path = report_dir / filename
-        path.write_text(content, encoding="utf-8")
-        logger.info(f"任务 {name} 报告已保存：{path}")
+    """推送结果到本地文件。"""
+    report_dir = Path.home() / "jarvis_data" / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{name}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+    path = report_dir / filename
+    path.write_text(content, encoding="utf-8")
+    logger.info(f"任务 {name} 报告已保存：{path}")
 
 
 # ── 任务管理 ──────────────────────────────────────────────────────────────────
@@ -168,8 +153,6 @@ def create_schedule(
     cron: str,
     prompt: str,
     delivery_type: str = "file",
-    receive_id: str = "",
-    receive_id_type: str = "open_id",
 ) -> tuple[bool, str]:
     """创建并启动一个新定时任务。"""
     if not is_safe_name(name):
@@ -188,8 +171,6 @@ def create_schedule(
         "prompt": prompt,
         "delivery": {
             "type": delivery_type,
-            "receive_id": receive_id,
-            "receive_id_type": receive_id_type,
         },
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -281,6 +262,38 @@ def list_schedules() -> list[dict]:
                 "next_run": next_run,
             })
     return result
+
+
+# ── 内置巡检 job：日历提醒（阶段 5）──────────────────────────────────────────────
+
+async def _reminder_sweep():
+    """每分钟巡检内置日历的到点提醒 → webpush。纯机械、零 AI、零新基建。
+
+    rest（休假）事件本就压制 reminder 轨投递，闭环完整（见 delivery.is_paused）。
+    """
+    from core import calendar as _cal
+    from core import delivery as _delivery
+    try:
+        due = _cal.collect_due_reminders()
+    except Exception as e:
+        logger.warning("提醒巡检失败：%s", e)
+        return
+    for item in due:
+        title, content = _cal.format_reminder(item)
+        try:
+            _delivery.deliver(track="reminder", title=title, content=content, severity="normal")
+        except Exception as e:
+            logger.warning("提醒推送失败（event=%s）：%s", item.get("id"), e)
+
+
+def register_builtin_jobs():
+    """注册内置巡检 job（提醒心跳，每 1 分钟）。供 main.py 启动时调用。"""
+    _scheduler.add_job(
+        _reminder_sweep, trigger="interval", minutes=1,
+        id="__reminder_sweep__", replace_existing=True,
+        misfire_grace_time=60, coalesce=True,
+    )
+    logger.info("已注册内置提醒巡检 job（每 1 分钟）。")
 
 
 # ── 公开调度器实例（供 main.py 启动/停止）──────────────────────────────���─────

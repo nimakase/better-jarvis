@@ -127,10 +127,15 @@ def enrich_records(records: list[dict], match_fn: MatchFn) -> list[dict]:
 
 # ────────────────────────── 输出富 xlsx ──────────────────────────
 
-def write_xlsx(records: list[dict], path: str) -> str:
-    """把富记录写成 xlsx（列见 COLUMNS）。已认领行浅灰底以示压底。"""
+def write_xlsx(records: list[dict], path: str, banner: Optional[str] = None) -> str:
+    """把富记录写成 xlsx（列见 COLUMNS）。已认领行浅灰底以示压底。
+
+    banner（可选）：在表头上方插一行醒目红字提示（如"信号已 N 天未更新"）。
+    缺省 None 时行为与原来逐字一致（表头在第 1 行、冻结 A2）。
+    """
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
 
     wb = Workbook()
     ws = wb.active
@@ -140,8 +145,17 @@ def write_xlsx(records: list[dict], path: str) -> str:
     header_fill = PatternFill("solid", fgColor="1A3A5C")
     owned_fill = PatternFill("solid", fgColor="EEEEEE")
 
+    header_row = 1
+    if banner:
+        ws.append([banner])
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(COLUMNS))
+        bc = ws.cell(row=1, column=1)
+        bc.font = Font(bold=True, color="B00020")
+        bc.alignment = Alignment(vertical="center")
+        header_row = 2
+
     ws.append(COLUMNS)
-    for c in ws[1]:
+    for c in ws[header_row]:
         c.font = header_font
         c.fill = header_fill
         c.alignment = Alignment(vertical="center")
@@ -155,9 +169,9 @@ def write_xlsx(records: list[dict], path: str) -> str:
     widths = {"company_name": 28, "website": 22, "contact_rationale": 50,
               "surplus_signals": 34, "sources": 30, "components": 18, "country": 14}
     for i, col in enumerate(COLUMNS, 1):
-        ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = widths.get(col, 12)
-    ws.freeze_panes = "A2"
-    ws.auto_filter.ref = ws.dimensions
+        ws.column_dimensions[get_column_letter(i)].width = widths.get(col, 12)
+    ws.freeze_panes = f"A{header_row + 1}"
+    ws.auto_filter.ref = f"A{header_row}:{get_column_letter(len(COLUMNS))}{ws.max_row}"
 
     wb.save(path)
     return path

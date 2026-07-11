@@ -16,6 +16,9 @@ venv/
 *.db
 *.db-wal
 *.db-shm
+*.db-journal
+# 运行时数据目录（潜客树、临时文件等，不入库）
+data/
 
 # 用户生成的技能和定时任务（包含用户特定配置）
 skills/

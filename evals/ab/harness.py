@@ -33,7 +33,7 @@ for c in CASES:
             print(f"⚠️  用例 {c['id']} 的期望工具 '{t}' 不在注册表里，请按 dump_tools 改名。")
 
 
-# ── 合成工具结果：拦截真实执行，避免飞书/记忆/发文件等副作用 ──────────
+# ── 合成工具结果：拦截真实执行，避免记忆/发文件等副作用 ──────────
 def _fake_execute_factory(rec):
     async def _fake_execute_tool(name, inputs):
         rec["executed"].append(name)
@@ -194,7 +194,6 @@ def _split_general_groups():
     """演示：把 general 组按连接器拆细，看收益是否依赖更细分组。
     按你的真实工具名调整这里的映射；找不到的名字会被忽略。"""
     SPLIT = {
-        "feishu": ["feishu_send_message", "feishu_get_messages"],      # ⚠️ TODO 改成真实名
         "document": ["read_document"],
         "credentials": ["list_credentials", "reveal_credential", "ingest_credential_image"],
     }

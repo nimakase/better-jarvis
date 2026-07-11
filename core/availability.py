@@ -35,27 +35,26 @@ def get_vacation_default(state_path: str | Path = d._STATE_PATH) -> str:
 
 # ────────────────────────── 休假确认 ──────────────────────────
 
+# 阶段 4 起，休假真源在内置日历（kind=rest 事件）；以下三函数委托日历。
+# confirmed 标志存日历事件 meta，不影响闸门（闸门只看 start/end，见 calendar.active_rest）。
+
 def list_rest(state_path: str | Path = d._STATE_PATH) -> list[dict]:
-    return d._load(state_path).get("rest_periods", [])
+    from core import calendar as _cal
+    return _cal.list_rests()
 
 
 def confirm_rest(rest_id: str, state_path: str | Path = d._STATE_PATH) -> bool:
-    s = d._load(state_path)
-    found = False
-    for rp in s.get("rest_periods", []):
-        if rp.get("id") == rest_id:
-            rp["confirmed"] = True
-            found = True
-    d._save(s, state_path)
-    return found
+    from core import calendar as _cal
+    return _cal.confirm_rest(rest_id)
 
 
 def pending_confirmations(as_of: Optional[str] = None, lookahead_days: int = 3,
                           state_path: str | Path = d._STATE_PATH) -> list[dict]:
     """临近（lookahead_days 内开始）且尚未确认的休假 → jarvis 该主动来问的。"""
+    from core import calendar as _cal
     today = date.fromisoformat(as_of) if as_of else date.today()
     out = []
-    for rp in d._load(state_path).get("rest_periods", []):
+    for rp in _cal.list_rests():
         if rp.get("confirmed"):
             continue
         try:

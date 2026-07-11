@@ -7,7 +7,7 @@
  * 并对 GET 请求提供一个轻量的离线兜底。
  */
 
-const APP_SHELL = "jarvis-shell-v1";
+const APP_SHELL = "jarvis-shell-v2";
 
 // 安装：立即接管，不等待旧 SW 退出
 self.addEventListener("install", (event) => {

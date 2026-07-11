@@ -13,7 +13,7 @@ from functools import partial
 from core import profile
 from core.registry import tool as _tool
 
-tool = partial(_tool, group="memory")
+tool = partial(_tool, group="profile")
 
 
 @tool(

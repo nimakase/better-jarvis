@@ -42,7 +42,6 @@
 | `connectors/report_tools.py` | 报告工具 |
 | `connectors/workflow_tools.py` | 工作流工具 |
 | `connectors/delivery_control.py` | 投递控制 |
-| `connectors/memory_tools.py` | （已中和的空模块） |
 | `core/reports.py` | 报告类型注册 |
 | `core/report_render.py` | 报告渲染 |
 | `core/intel_cards.py` | 情报台卡片 |

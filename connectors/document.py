@@ -27,8 +27,9 @@ import config
 from functools import partial
 from core.registry import tool as _tool
 
-# 本连接器所有工具归入 document 组（渐进披露时按需加载）
-tool = partial(_tool, group="document")
+# read_document 归入 fileio 组（与元工具 send_file_to_chat 同组：文件读入/发出）。
+# 注意：与文档保险箱 doc_vault（group=documents）刻意分开——一个只读取，一个加密归档。
+tool = partial(_tool, group="fileio")
 
 # token 安全上限：超过此长度截断并提示
 MAX_CHARS = 120_000  # ~8万 token，留足 context 给其他内容
@@ -201,7 +202,8 @@ async def _read_image(path: str) -> str:
     (
         "读取本地文件并提取文字内容。支持 PDF、Word(.docx)、Excel(.xlsx)、"
         "PowerPoint(.pptx)、CSV、TXT、Markdown，以及 JPG/PNG 等图片（视觉识别）。"
-        "用户提到要读取、查看、分析、总结某个文件时使用。"
+        "用户要读取、查看、分析、总结某个文件时使用。"
+        "【只读取、不保存】——若用户是要把保单/合同等存档归类，改用 ingest_document_file。"
         "path 必须是文件的完整路径。"
     ),
     {

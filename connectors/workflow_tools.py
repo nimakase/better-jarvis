@@ -10,7 +10,7 @@ from functools import partial
 from core.registry import tool as _tool
 from core import workflow_registry as wr
 
-tool = partial(_tool, group="workflow")
+tool = partial(_tool, group="workflows")
 
 
 @tool(

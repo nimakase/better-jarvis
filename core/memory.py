@@ -61,8 +61,16 @@ def decrypt(token: str) -> str:
 # ── 数据库初始化 ──────────────────────────────────────────────────────────────
 
 def _get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(config.MEMORY_DB_PATH))
+    # timeout：撞锁时 sqlite3 自身的等待秒数（与下面的 busy_timeout 配合）。
+    conn = sqlite3.connect(str(config.MEMORY_DB_PATH), timeout=10.0)
     conn.row_factory = sqlite3.Row
+    # 并发加固：history 每轮落盘 + vault/profile 共用同一个 memory.db，多写易撞
+    # "database is locked"。WAL 让写不阻塞读、busy_timeout 让撞锁时自动等待而非
+    # 立即报错；synchronous=NORMAL 在 WAL 下是安全且更快的标准搭配。
+    # 三条都幂等：journal_mode 是库级持久属性设一次即生效，其余为连接级。
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")   # 毫秒
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 

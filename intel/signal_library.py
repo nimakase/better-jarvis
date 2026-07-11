@@ -233,6 +233,19 @@ def expire_stale(db_path: str | Path = DEFAULT_DB, as_of: Optional[str] = None,
 
 # ────────────────────────── 消费：日报视图 ──────────────────────────
 
+def latest_collected_date(db_path: str | Path = DEFAULT_DB) -> Optional[str]:
+    """信号库最近一次采集到的信号日期（date_collected 最大值）。空库返回 None。
+
+    供潜客工作流做"信号新鲜度"自检：判断离上次采集过了多少天。
+    """
+    conn = connect(db_path)
+    try:
+        row = conn.execute("SELECT MAX(date_collected) FROM signals").fetchone()
+    finally:
+        conn.close()
+    return row[0] if row and row[0] else None
+
+
 def query_report(db_path: str | Path = DEFAULT_DB, days: int = 14,
                  as_of: Optional[str] = None) -> dict:
     """返回最近 days 天的 active 信号，按 signal_type 分组（日报渲染用）。"""
@@ -364,6 +377,10 @@ def detect_hot_sectors(db_path: str | Path = DEFAULT_DB, threshold: float = 6.0,
     return hot
 
 
+# 导入即建表（项目惯例：core/memory、profile、history 同样在模块级初始化）。
+# 保证日报、情报台看板、采集工作流等直接调库的路径无需先经其它入口即可用。
+init_db()
+
+
 if __name__ == "__main__":
-    init_db()
     print(f"signal_library initialized at {DEFAULT_DB}")

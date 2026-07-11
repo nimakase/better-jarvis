@@ -12,8 +12,11 @@
   与遗留的 register_*_tools()（迁移期两种写法并存）。
 """
 
+import logging
 from dataclasses import dataclass
 from typing import Callable, Optional
+
+logger = logging.getLogger("jarvis.registry")
 
 _EMPTY_SCHEMA = {"type": "object", "properties": {}}
 
@@ -33,8 +36,19 @@ _ORDER: list[str] = []
 
 
 def register_spec(spec: ToolSpec) -> None:
-    """注册一个 ToolSpec。重名自动跳过（首次注册优先）。"""
+    """注册一个 ToolSpec。重名跳过（首次注册优先），并打一条告警。
+
+    "首次注册优先"是刻意的安全语义：第一方工具（连接器/元工具）在启动时先注册，
+    自建技能随后加载；若自建技能撞名第一方，后者被忽略而非覆盖。但撞名以前是
+    *静默* 丢弃、难以排查——这里改为告警，点明撞的是哪个名、新旧各属哪个组。
+    """
     if spec.name in _SPECS:
+        existing = _SPECS[spec.name]
+        logger.warning(
+            "工具重名，忽略后注册者（保留先注册的）：name=%r 已存在(group=%r)，"
+            "跳过新注册(group=%r)。若是自建技能撞了第一方工具名，请给技能改名。",
+            spec.name, existing.group, spec.group,
+        )
         return
     _SPECS[spec.name] = spec
     _ORDER.append(spec.name)

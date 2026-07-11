@@ -537,9 +537,9 @@ META_TOOL_DEFS = [
     {
         "name": "send_file_to_chat",
         "description": (
-            "将本地文件发送到网页对话界面，用户可直接点击下载。"
-            "适用于：生成报告、导出数据、输出文档后让用户下载的场景。"
-            "不需要飞书，直接在当前对话窗口显示下载卡片。"
+            "将本地文件发送到网页对话界面，用户可直接点击下载（在当前对话窗口显示下载卡片）。"
+            "【凡是你生成了文件——报告 PDF、导出的 Excel、文档等——都必须调用本工具把文件发给用户，"
+            "不要只在回复里报路径】。file_path 为文件完整路径。"
         ),
         "input_schema": {
             "type": "object",
@@ -595,9 +595,7 @@ META_TOOL_DEFS = [
                 "description":      {"type": "string", "description": "任务描述，便于日后识别"},
                 "cron":             {"type": "string", "description": "cron 表达式，如 '0 8 * * *'（每天8点），'0 8 * * 1-5'（工作日8点）"},
                 "prompt":           {"type": "string", "description": "触发时发给贾维斯的完整指令，越具体越好"},
-                "delivery_type":    {"type": "string", "description": "推送方式：feishu（飞书）或 file（本地文件），默认 file"},
-                "receive_id":       {"type": "string", "description": "飞书接收方 ID（delivery_type=feishu 时必填）"},
-                "receive_id_type":  {"type": "string", "description": "飞书 ID 类型：open_id / user_id / chat_id，默认 open_id"},
+                "delivery_type":    {"type": "string", "description": "推送方式：目前仅支持 file（本地文件），默认 file"},
             },
             "required": ["name", "description", "cron", "prompt"]
         }
@@ -674,10 +672,10 @@ async def _handle_cleanup_drafts(confirm_delete: list = None) -> str:
 
 async def _handle_create_schedule(
     name: str, description: str, cron: str, prompt: str,
-    delivery_type: str = "file", receive_id: str = "", receive_id_type: str = "open_id"
+    delivery_type: str = "file"
 ) -> str:
     from core.scheduler import create_schedule
-    ok, msg = create_schedule(name, description, cron, prompt, delivery_type, receive_id, receive_id_type)
+    ok, msg = create_schedule(name, description, cron, prompt, delivery_type)
     return msg
 
 async def _handle_list_schedules() -> str:
@@ -721,9 +719,24 @@ META_HANDLERS = {
 }
 
 
+# 元工具按职责分到三个领域组（原先全是默认的 general）：
+#   authoring  自建工具的增删改查
+#   scheduling 定时任务管理
+#   fileio     文件 I/O（与 connectors/document 的 read_document 同组）
+_META_GROUPS = {
+    "create_tool": "authoring", "edit_tool": "authoring", "delete_tool": "authoring",
+    "cleanup_drafts": "authoring", "list_tools_meta": "authoring",
+    "create_schedule": "scheduling", "list_schedules": "scheduling",
+    "delete_schedule": "scheduling", "pause_schedule": "scheduling", "resume_schedule": "scheduling",
+    "send_file_to_chat": "fileio",
+}
+
+
 def register_meta_tools():
     for defn in META_TOOL_DEFS:
-        register_tool(defn, META_HANDLERS[defn["name"]])
+        # 不就地改 def，拷一份注入 group（保持 META_TOOL_DEFS 纯净）
+        spec = {**defn, "group": _META_GROUPS.get(defn["name"], "general")}
+        register_tool(spec, META_HANDLERS[defn["name"]])
 
 
 # 模块导入即注册元工具（统一为"导入即自注册"，main.py 不再显式调用）

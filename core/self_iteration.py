@@ -37,6 +37,9 @@ class Proposal:
     test_code: str       # 配套测试脚本（约定：失败时退出码非零）
     rationale: str = ""  # 为什么改（动机）
     impact: str = ""     # 改了会怎样（影响）
+    category: str = ""   # 缺陷类别：bugfix/robustness/correctness/readability/style/dedup
+    severity: str = ""   # 严重度：high/medium/low —— 必要性闸据此判定是否自动落地
+    defect: str = ""     # 诊断出的具体缺陷（必要性的依据，不是泛泛"可以更好"）
     test_name: str = ""  # 自动测试文件名(test_auto_*.py)；留空按 path 派生
 
 
