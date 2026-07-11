@@ -5,7 +5,7 @@
   - APScheduler AsyncIOScheduler 挂在 FastAPI 事件循环内
   - 每个任务存在 schedules/<name>/config.json
   - 触发时创建独立 JarvisController 实例执行，不污染用户对话历史
-  - 结果通过飞书推送或写入本地文件
+  - 结果写入本地文件
 
 config.json 格式：
 {
@@ -15,9 +15,7 @@ config.json 格式：
     "cron": "0 8 * * *",             // 标准 cron 表达式
     "prompt": "搜索今日电子元器件...",  // 发给贾维斯的指令
     "delivery": {
-        "type": "feishu",            // feishu | file
-        "receive_id": "xxx",         // 飞书接收方 ID（type=feishu 时必填）
-        "receive_id_type": "open_id" // open_id | user_id | chat_id
+        "type": "file"               // 目前仅支持本地文件
     },
     "created_at": "2026-06-13T..."
 }
@@ -32,9 +30,8 @@ from typing import Optional
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
+from core.safety import safe_name, is_safe_name
 
 logger = logging.getLogger("jarvis.scheduler")
 
@@ -47,19 +44,34 @@ _scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
 
 # ── 任务执行 ──────────────────────────────────────────────────────────────────
 
-async def _run_job(name: str, prompt: str, delivery: dict):
-    """执行一个定时任务，使用独立的 Controller 实例。"""
+async def _run_job(name: str, prompt: str, delivery: dict, track: str = ""):
+    """执行一个定时任务，使用独立的 Controller 实例。
+
+    track（可选）：投递轨道名（如 report / prospect）。若该轨道被投递闸门拦住
+    （对话暂停或休假区间），则整个任务跳过——不运行、不推送（潜客轨即"冻结不烧节点"）。
+    无 track 的老任务行为完全不变。
+    """
     from core.controller import JarvisController
 
     logger.info(f"定时任务触发：{name}")
 
+    if track:
+        try:
+            from core import delivery as _delivery
+            paused, reason = _delivery.is_paused(track)
+            if paused:
+                logger.info(f"定时任务 {name} 跳过（轨道 {track} 暂停：{reason}）")
+                return
+        except Exception as e:
+            logger.warning(f"投递闸门检查失败（继续执行）：{e}")
+
     try:
-        sc = JarvisController()
+        sc = JarvisController(interactive=False)  # 后台定时实例：不写用户档案/不自建工具或调度
         result = ""
-        async for chunk in sc.chat(prompt):
-            # 过滤掉工具调用状态行（⚙️ 调用工具...）
-            if not chunk.startswith("\n⚙️"):
-                result += chunk
+        async for ev in sc.chat(prompt):
+            # 只累加正文文本；工具进度走 type=="tool" 事件，定时任务不需要
+            if ev.get("type") == "text":
+                result += ev["text"]
 
         result = result.strip()
         if not result:
@@ -74,36 +86,26 @@ async def _run_job(name: str, prompt: str, delivery: dict):
 
 
 async def _deliver(name: str, content: str, delivery: dict):
-    """推送结果到指定渠道。"""
-    delivery_type = delivery.get("type", "file")
-
-    if delivery_type == "feishu":
-        from connectors.feishu import send_feishu_message
-        receive_id = delivery.get("receive_id", "")
-        receive_id_type = delivery.get("receive_id_type", "open_id")
-        if not receive_id:
-            logger.error(f"任务 {name}：飞书 receive_id 未配置")
-            return
-        header = f"📋 【{name}】定时报告\n{datetime.now().strftime('%Y-%m-%d %H:%M')}\n{'─' * 30}\n"
-        await send_feishu_message(receive_id, header + content, receive_id_type)
-
-    elif delivery_type == "file":
-        report_dir = Path.home() / "jarvis_data" / "reports"
-        report_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"{name}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
-        path = report_dir / filename
-        path.write_text(content, encoding="utf-8")
-        logger.info(f"任务 {name} 报告已保存：{path}")
+    """推送结果到本地文件。"""
+    report_dir = Path.home() / "jarvis_data" / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{name}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+    path = report_dir / filename
+    path.write_text(content, encoding="utf-8")
+    logger.info(f"任务 {name} 报告已保存：{path}")
 
 
 # ── 任务管理 ──────────────────────────────────────────────────────────────────
 
 def _schedule_dir(name: str) -> Path:
-    return SCHEDULES_DIR / name
+    return SCHEDULES_DIR / safe_name(name)   # safe_name 防路径穿越，非法名抛 ValueError
 
 
 def _load_config(name: str) -> Optional[dict]:
-    path = _schedule_dir(name) / "config.json"
+    try:
+        path = _schedule_dir(name) / "config.json"
+    except ValueError:
+        return None
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
@@ -121,7 +123,8 @@ def _register_job(cfg: dict):
     _scheduler.add_job(
         _run_job,
         trigger=CronTrigger.from_crontab(cfg["cron"], timezone="Asia/Shanghai"),
-        kwargs={"name": name, "prompt": cfg["prompt"], "delivery": cfg.get("delivery", {})},
+        kwargs={"name": name, "prompt": cfg["prompt"], "delivery": cfg.get("delivery", {}),
+                "track": cfg.get("track", "")},
         id=name,
         replace_existing=True,
         misfire_grace_time=300,
@@ -150,10 +153,10 @@ def create_schedule(
     cron: str,
     prompt: str,
     delivery_type: str = "file",
-    receive_id: str = "",
-    receive_id_type: str = "open_id",
 ) -> tuple[bool, str]:
     """创建并启动一个新定时任务。"""
+    if not is_safe_name(name):
+        return False, f"任务名非法：{name!r}（只允许字母、数字、下划线、连字符，长度 1-64）"
     # 验证 cron 表达式
     try:
         CronTrigger.from_crontab(cron, timezone="Asia/Shanghai")
@@ -168,8 +171,6 @@ def create_schedule(
         "prompt": prompt,
         "delivery": {
             "type": delivery_type,
-            "receive_id": receive_id,
-            "receive_id_type": receive_id_type,
         },
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -186,7 +187,10 @@ def create_schedule(
 def delete_schedule(name: str) -> tuple[bool, str]:
     """删除定时任务。"""
     import shutil
-    d = _schedule_dir(name)
+    try:
+        d = _schedule_dir(name)
+    except ValueError as e:
+        return False, str(e)
     if not d.exists():
         return False, f"任务 {name} 不存在"
 
@@ -218,6 +222,26 @@ def resume_schedule(name: str) -> tuple[bool, str]:
     return True, f"任务 {name} 已恢复"
 
 
+def update_schedule(name: str, cron: Optional[str] = None) -> tuple[bool, str]:
+    """更新任务的执行时间（cron）。校验通过后落盘；若任务在运行则重注册生效。"""
+    cfg = _load_config(name)
+    if not cfg:
+        return False, f"任务 {name} 不存在"
+    if cron is not None:
+        try:
+            CronTrigger.from_crontab(cron, timezone="Asia/Shanghai")
+        except Exception as e:
+            return False, f"cron 表达式无效：{e}"
+        cfg["cron"] = cron
+    _save_config(name, cfg)
+    if cfg.get("status") == "active":
+        try:
+            _register_job(cfg)   # replace_existing=True，原子替换触发时间
+        except Exception as e:
+            return False, f"更新后注册失败：{e}"
+    return True, f"任务 {name} 执行时间已更新为 {cfg['cron']}"
+
+
 def list_schedules() -> list[dict]:
     result = []
     if not SCHEDULES_DIR.exists():
@@ -238,6 +262,38 @@ def list_schedules() -> list[dict]:
                 "next_run": next_run,
             })
     return result
+
+
+# ── 内置巡检 job：日历提醒（阶段 5）──────────────────────────────────────────────
+
+async def _reminder_sweep():
+    """每分钟巡检内置日历的到点提醒 → webpush。纯机械、零 AI、零新基建。
+
+    rest（休假）事件本就压制 reminder 轨投递，闭环完整（见 delivery.is_paused）。
+    """
+    from core import calendar as _cal
+    from core import delivery as _delivery
+    try:
+        due = _cal.collect_due_reminders()
+    except Exception as e:
+        logger.warning("提醒巡检失败：%s", e)
+        return
+    for item in due:
+        title, content = _cal.format_reminder(item)
+        try:
+            _delivery.deliver(track="reminder", title=title, content=content, severity="normal")
+        except Exception as e:
+            logger.warning("提醒推送失败（event=%s）：%s", item.get("id"), e)
+
+
+def register_builtin_jobs():
+    """注册内置巡检 job（提醒心跳，每 1 分钟）。供 main.py 启动时调用。"""
+    _scheduler.add_job(
+        _reminder_sweep, trigger="interval", minutes=1,
+        id="__reminder_sweep__", replace_existing=True,
+        misfire_grace_time=60, coalesce=True,
+    )
+    logger.info("已注册内置提醒巡检 job（每 1 分钟）。")
 
 
 # ── 公开调度器实例（供 main.py 启动/停止）──────────────────────────────���─────

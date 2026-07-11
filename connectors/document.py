@@ -23,10 +23,13 @@ import os
 from pathlib import Path
 from typing import Optional
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
-from core.controller import register_tool
+from functools import partial
+from core.registry import tool as _tool
+
+# read_document 归入 fileio 组（与元工具 send_file_to_chat 同组：文件读入/发出）。
+# 注意：与文档保险箱 doc_vault（group=documents）刻意分开——一个只读取，一个加密归档。
+tool = partial(_tool, group="fileio")
 
 # token 安全上限：超过此长度截断并提示
 MAX_CHARS = 120_000  # ~8万 token，留足 context 给其他内容
@@ -194,6 +197,25 @@ async def _read_image(path: str) -> str:
 
 # ── 主工具函数 ────────────────────────────────────────────────────────────────
 
+@tool(
+    "read_document",
+    (
+        "读取本地文件并提取文字内容。支持 PDF、Word(.docx)、Excel(.xlsx)、"
+        "PowerPoint(.pptx)、CSV、TXT、Markdown，以及 JPG/PNG 等图片（视觉识别）。"
+        "用户要读取、查看、分析、总结某个文件时使用。"
+        "【只读取、不保存】——若用户是要把保单/合同等存档归类，改用 ingest_document_file。"
+        "path 必须是文件的完整路径。"
+    ),
+    {
+        "type": "object",
+        "properties": {
+            "path":  {"type": "string", "description": "文件完整路径，如 C:/Users/Ned/Desktop/合同.pdf"},
+            "pages": {"type": "string", "description": "仅 PDF 有效：指定页码范围，如 '1-5' 或 '1,3,5'，留空=全部"},
+            "sheet": {"type": "string", "description": "仅 Excel 有效：指定 Sheet 名称，留空=所有 Sheet"},
+        },
+        "required": ["path"],
+    },
+)
 async def read_document(path: str, pages: str = "", sheet: str = "") -> str:
     """
     读取文档并返回文本内容。
@@ -240,43 +262,3 @@ async def read_document(path: str, pages: str = "", sheet: str = "") -> str:
         return f"缺少依赖库 {pkg}，请运行：pip install {pkg}"
     except Exception as e:
         return f"读取文件出错：{type(e).__name__}: {e}"
-
-
-# ── 工具定义 & 注册 ───────────────────────────────────────────────────────────
-
-DOCUMENT_TOOL_DEF = {
-    "name": "read_document",
-    "description": (
-        "读取本地文件并提取文字内容。支持 PDF、Word(.docx)、Excel(.xlsx)、"
-        "PowerPoint(.pptx)、CSV、TXT、Markdown，以及 JPG/PNG 等图片（视觉识别）。"
-        "用户提到要读取、查看、分析、总结某个文件时使用。"
-        "path 必须是文件的完整路径。"
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "文件完整路径，如 C:/Users/Ned/Desktop/合同.pdf"
-            },
-            "pages": {
-                "type": "string",
-                "description": "仅 PDF 有效：指定页码范围，如 '1-5' 或 '1,3,5'，留空=全部"
-            },
-            "sheet": {
-                "type": "string",
-                "description": "仅 Excel 有效：指定 Sheet 名称，留空=所有 Sheet"
-            },
-        },
-        "required": ["path"]
-    }
-}
-
-
-async def _document_handler(path: str, pages: str = "", sheet: str = "") -> str:
-    """async 包装，确保 controller 能正确识别并 await。"""
-    return await read_document(path=path, pages=pages, sheet=sheet)
-
-
-def register_document_tools():
-    register_tool(DOCUMENT_TOOL_DEF, _document_handler)
