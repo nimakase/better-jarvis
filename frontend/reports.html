@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>报告中心 · 贾维斯</title>
+<style>
+  :root{
+    --bg-0:#0a0b0f; --bg-1:#0f1117; --bg-2:#161922; --bg-3:#1c2030; --bg-hover:#232838;
+    --border:#242a3a; --border-soft:#1b2030;
+    --text:#e6e8ee; --text-dim:#9aa3b2; --text-faint:#5a6373;
+    --accent:#6366f1; --green:#34d399; --radius:14px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; background:var(--bg-0); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:720px; margin:0 auto; padding:18px 16px 60px;}
+  .top{display:flex; align-items:center; gap:10px; padding:8px 2px 14px;}
+  .top a{color:var(--text-dim); text-decoration:none; font-size:20px;}
+  .top h1{font-size:17px; font-weight:600; margin:0;}
+  .top .sub{font-size:12px; color:var(--text-faint); margin-left:auto;}
+  h2{font-size:13px; color:var(--text-dim); font-weight:500; margin:14px 2px 8px;}
+  .gen{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:6px;}
+  .gen button{background:var(--bg-3); color:var(--text); border:1px solid var(--border);
+    border-radius:9px; padding:8px 12px; font-size:13px; cursor:pointer; font-family:inherit;}
+  .gen button:hover{background:var(--bg-hover);}
+  .card{background:var(--bg-2); border:1px solid var(--border); border-radius:var(--radius); padding:4px 14px;}
+  .item{display:flex; align-items:center; gap:12px; padding:13px 0; border-top:1px solid var(--border-soft);}
+  .item:first-child{border-top:none;}
+  .item .meta{flex:1; min-width:0;}
+  .item .title{font-size:14px;}
+  .item .sub{font-size:12px; color:var(--text-faint); margin-top:3px;}
+  .chip{font-size:11px; padding:2px 8px; border-radius:8px; background:var(--bg-3); border:1px solid var(--border); color:var(--text-dim); white-space:nowrap;}
+  .open{background:var(--accent); color:#fff; border:none; border-radius:8px; padding:7px 14px; font-size:13px; cursor:pointer; text-decoration:none;}
+  .muted{padding:26px 16px; text-align:center; color:var(--text-faint); font-size:13px;}
+  .toast{position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:var(--bg-3);
+    border:1px solid var(--border); padding:9px 16px; border-radius:10px; font-size:13px; opacity:0; transition:.2s;}
+  .toast.show{opacity:1;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><a href="/intel" title="返回情报台">‹</a><h1>报告中心</h1><span class="sub">按日期归档的报告快照</span></div>
+  <h2>生成报告</h2>
+  <div class="gen" id="gen"></div>
+  <h2>历史归档</h2>
+  <div class="card" id="list"><div class="muted">加载中…</div></div>
+</div>
+<div id="toast" class="toast"></div>
+<script>
+function toast(m){const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2200);}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+async function load(){
+  const list=document.getElementById('list'), gen=document.getElementById('gen');
+  try{
+    const d=await (await fetch('/api/reports')).json();
+    gen.innerHTML='';
+    // 只为"可一键生成"的类型出按钮；需撰写正文的类型（如自定义报告）走对话生成，一键点只会出空壳
+    (d.types||[]).filter(t=>t.quick!==false).forEach(t=>{
+      const b=document.createElement('button'); b.textContent='生成「'+t.name+'」';
+      b.onclick=()=>generate(t.type, b); gen.appendChild(b);
+    });
+    if(!gen.children.length) gen.innerHTML='<span class="muted" style="padding:0">暂无可一键生成的报告类型（自定义报告请直接对贾维斯说）</span>';
+    if(!(d.reports||[]).length){ list.innerHTML='<div class="muted">还没有报告。点上面「生成」即可产出第一份。</div>'; return; }
+    list.innerHTML='';
+    d.reports.forEach(r=>{
+      const el=document.createElement('div'); el.className='item';
+      el.innerHTML=`<span class="chip">${esc(r.type_name||r.type)}</span>
+        <div class="meta"><div class="title">${esc(r.title)}</div>
+        <div class="sub">${esc(r.date)} · ${esc((r.created_at||'').replace('T',' '))}</div></div>
+        <a class="open" href="/api/reports/${esc(r.id)}/download" target="_blank" rel="noopener">打开</a>`;
+      list.appendChild(el);
+    });
+  }catch(e){ list.innerHTML='<div class="muted">加载失败：'+esc(e)+'</div>'; }
+}
+
+async function generate(type, btn){
+  const old=btn.textContent; btn.textContent='生成中…'; btn.disabled=true;
+  try{
+    const d=await (await fetch(`/api/reports/${encodeURIComponent(type)}/generate`,{method:'POST'})).json();
+    if(d.ok){ toast('已生成：'+(d.report&&d.report.title||'')); load(); }
+    else toast('失败：'+(d.error||''));
+  }catch(e){ toast('网络错误'); }
+  finally{ btn.textContent=old; btn.disabled=false; }
+}
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+.git
+__pycache__
+*.py[cod]
+*.egg-info
+.venv
+venv
+dist
+build
+data
+better jarvis
+*_backup_*.zip
+.env
+.DS_Store

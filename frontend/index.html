@@ -2,301 +2,833 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>贾维斯</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>JARVIS</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0a0b0f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <style>
+  :root {
+    /* 背景层次 */
+    --bg-0: #0a0b0f;        /* 最底层 */
+    --bg-1: #0f1117;        /* 消息区 */
+    --bg-2: #161922;        /* 顶栏 / 输入区 */
+    --bg-3: #1c2030;        /* 控件 */
+    --bg-hover: #232838;
+    --border: #242a3a;
+    --border-soft: #1b2030;
+
+    /* 文字 */
+    --text: #e6e8ee;
+    --text-dim: #9aa3b2;
+    --text-faint: #5a6373;
+
+    /* 主色 */
+    --accent: #6366f1;
+    --accent-2: #8b5cf6;
+    --accent-grad: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    --accent-soft: rgba(99, 102, 241, 0.14);
+    --accent-ring: rgba(99, 102, 241, 0.45);
+
+    /* 语义色 */
+    --green: #34d399;
+    --yellow: #fbbf24;
+    --red: #f87171;
+
+    --radius: 14px;
+    --radius-lg: 18px;
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+    --shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.25);
+  }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    background: #0f0f0f;
-    color: #e8e8e8;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background:
+      radial-gradient(1200px 600px at 50% -10%, rgba(99,102,241,0.10), transparent 60%),
+      var(--bg-0);
+    color: var(--text);
     height: 100vh;
     display: flex;
     flex-direction: column;
+    -webkit-font-smoothing: antialiased;
   }
 
-  /* 顶栏 */
+  /* 滚动条 */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2a3142; border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a4256; background-clip: padding-box; }
+
+  svg { display: block; }
+
+  /* ── 顶栏 ── */
   header {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 14px 20px;
-    border-bottom: 1px solid #222;
-    background: #141414;
+    padding: 13px 22px;
+    border-bottom: 1px solid var(--border-soft);
+    background: rgba(18, 21, 30, 0.72);
+    backdrop-filter: saturate(160%) blur(14px);
+    -webkit-backdrop-filter: saturate(160%) blur(14px);
+    position: relative;
+    z-index: 10;
   }
-  header h1 { font-size: 17px; font-weight: 600; color: #fff; }
+  .brand { display: flex; align-items: center; gap: 11px; }
+  .brand-logo {
+    width: 30px; height: 30px;
+    border-radius: 9px;
+    background: var(--accent-grad);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 14px rgba(99,102,241,0.4);
+    flex-shrink: 0;
+  }
+  header h1 {
+    font-size: 16px; font-weight: 600; letter-spacing: 2.5px;
+    background: linear-gradient(90deg, #a5b4fc, #c4b5fd);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: #c4b5fd;
+  }
+
   .status-dot {
-    width: 8px; height: 8px;
+    width: 9px; height: 9px;
     border-radius: 50%;
-    background: #3a3a3a;
+    background: #39414f;
     transition: background 0.3s;
+    flex-shrink: 0;
   }
-  .status-dot.online { background: #4ade80; }
-  .status-dot.typing { background: #facc15; animation: pulse 1s infinite; }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .status-dot.online { background: var(--green);  animation: glow-green 1.9s ease-in-out infinite; }
+  .status-dot.typing { background: var(--yellow); animation: glow-amber 1.2s ease-in-out infinite; }
+  @keyframes glow-green {
+    0%,100% { box-shadow: 0 0 0 3px rgba(52,211,153,0.14), 0 0 9px 1px rgba(52,211,153,0.40); }
+    50%     { box-shadow: 0 0 0 6px rgba(52,211,153,0.22), 0 0 16px 4px rgba(52,211,153,0.80); }
+  }
+  @keyframes glow-amber {
+    0%,100% { box-shadow: 0 0 0 3px rgba(251,191,36,0.14), 0 0 9px 1px rgba(251,191,36,0.45); }
+    50%     { box-shadow: 0 0 0 6px rgba(251,191,36,0.24), 0 0 16px 4px rgba(251,191,36,0.85); }
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
 
   header .actions { margin-left: auto; display: flex; gap: 8px; }
   .btn-sm {
-    font-size: 12px; padding: 5px 10px;
-    background: #222; border: 1px solid #333;
-    color: #aaa; border-radius: 6px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12.5px; padding: 7px 12px;
+    background: var(--bg-3); border: 1px solid var(--border);
+    color: var(--text-dim); border-radius: 9px; cursor: pointer;
+    transition: all 0.15s;
   }
-  .btn-sm:hover { background: #2a2a2a; color: #fff; }
+  .btn-sm:hover { background: var(--bg-hover); color: #fff; border-color: #2f3850; }
+  .btn-sm svg { width: 15px; height: 15px; }
 
-  /* 消息区 */
+  /* ── 消息区 ── */
   #messages {
     flex: 1;
     overflow-y: auto;
-    padding: 24px 0;
+    padding: 26px 0 8px;
     scroll-behavior: smooth;
   }
 
   .message {
     display: flex;
-    gap: 12px;
-    padding: 10px 20px;
-    max-width: 860px;
+    gap: 13px;
+    padding: 9px 20px;
+    max-width: 880px;
     margin: 0 auto;
     width: 100%;
+    animation: rise 0.28s cubic-bezier(.2,.7,.3,1) both;
   }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
   .message.user { flex-direction: row-reverse; }
 
   .avatar {
     width: 32px; height: 32px;
-    border-radius: 50%;
+    border-radius: 10px;
     display: flex; align-items: center; justify-content: center;
     font-size: 13px; font-weight: 700;
     flex-shrink: 0;
+    box-shadow: var(--shadow-sm);
   }
-  .message.user .avatar      { background: #2563eb; color: #fff; }
-  .message.assistant .avatar { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
-  .message.system .avatar    { background: #1a1a1a; color: #555; }
+  .message.user .avatar      { background: var(--accent-grad); color: #fff; }
+  .message.assistant .avatar { background: #1b2130; color: var(--accent-2); border: 1px solid #2a3350; }
+  .message.system .avatar    { background: #14171f; color: var(--text-faint); box-shadow: none; }
 
   .bubble {
-    max-width: calc(100% - 50px);
-    line-height: 1.65;
+    max-width: calc(100% - 54px);
+    line-height: 1.68;
     font-size: 14.5px;
   }
   .message.user .bubble {
-    background: #1d4ed8;
+    background: var(--accent-grad);
     color: #fff;
-    border-radius: 14px 4px 14px 14px;
-    padding: 10px 14px;
+    border-radius: 16px 5px 16px 16px;
+    padding: 10px 15px;
+    box-shadow: 0 4px 16px rgba(99,102,241,0.28);
   }
   .message.assistant .bubble {
-    color: #e2e8f0;
+    color: #dfe3ec;
     white-space: pre-wrap;
     word-break: break-word;
+    padding-top: 4px;
   }
+
+  /* ── 助手正文 Markdown 渲染 ── */
+  .md-body { white-space: normal; }
+  .md-body > *:first-child { margin-top: 0; }
+  .md-body > *:last-child { margin-bottom: 0; }
+  .md-body h1, .md-body h2, .md-body h3, .md-body h4 {
+    margin: 15px 0 7px; line-height: 1.3; font-weight: 650; color: #eef1f8;
+  }
+  .md-body h1 { font-size: 18px; }
+  .md-body h2 { font-size: 16px; }
+  .md-body h3 { font-size: 14.5px; }
+  .md-body h4 { font-size: 13.5px; color: #c9cee0; }
+  .md-body p { margin: 7px 0; }
+  .md-body ul, .md-body ol { margin: 7px 0; padding-left: 22px; }
+  .md-body li { margin: 3px 0; }
+  .md-body strong { color: #f0f2f8; font-weight: 650; }
+  .md-body code {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px;
+    background: rgba(255,255,255,0.07); border: 1px solid var(--border-soft);
+    border-radius: 5px; padding: 1px 5px;
+  }
+  .md-body pre {
+    background: #0d1018; border: 1px solid var(--border-soft); border-radius: 9px;
+    padding: 11px 13px; overflow-x: auto; margin: 9px 0;
+  }
+  .md-body pre code { background: none; border: none; padding: 0; }
+  .md-body blockquote {
+    margin: 8px 0; padding: 2px 12px; border-left: 3px solid var(--accent-2);
+    color: var(--text-dim);
+  }
+  .md-body a { color: var(--accent-2); text-decoration: none; }
+  .md-body a:hover { text-decoration: underline; }
+  .md-body hr { border: none; border-top: 1px solid var(--border-soft); margin: 12px 0; }
+  .md-body table {
+    border-collapse: collapse; margin: 10px 0; max-width: 100%;
+    font-size: 13px; display: block; overflow-x: auto;
+  }
+  .md-body th, .md-body td {
+    border: 1px solid var(--border-soft); padding: 6px 11px; text-align: left; white-space: nowrap;
+  }
+  .md-body thead th { background: rgba(99,102,241,0.12); color: #dfe3ff; font-weight: 600; }
+  .md-body tbody tr:nth-child(even) td { background: rgba(255,255,255,0.025); }
   .message.system .bubble {
-    color: #555;
+    color: var(--text-faint);
     font-size: 12px;
-    font-family: monospace;
-    background: #111;
-    border-radius: 6px;
-    padding: 8px 12px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    background: rgba(255,255,255,0.02);
+    border: 1px solid var(--border-soft);
+    border-radius: 9px;
+    padding: 9px 13px;
     white-space: pre-wrap;
     overflow-x: auto;
   }
 
   /* 文件预览气泡 */
+  .file-bubble svg { width: 18px; height: 18px; flex-shrink: 0; }
   .file-bubble {
     display: flex;
     align-items: center;
-    gap: 10px;
-    background: #1e3a5f;
-    border: 1px solid #2563eb44;
-    border-radius: 10px;
-    padding: 10px 14px;
-    max-width: 320px;
+    gap: 11px;
+    background: rgba(99,102,241,0.08);
+    border: 1px solid rgba(99,102,241,0.28);
+    border-radius: 13px;
+    padding: 11px 15px;
+    max-width: 330px;
+    transition: background 0.15s, border-color 0.15s;
   }
-  .file-icon { font-size: 22px; flex-shrink: 0; }
+  .file-icon { font-size: 22px; flex-shrink: 0; line-height: 1; }
   .file-info { overflow: hidden; }
-  .file-name { font-size: 13px; font-weight: 600; color: #93c5fd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .file-meta { font-size: 11px; color: #64748b; margin-top: 2px; }
+  .file-name { font-size: 13px; font-weight: 600; color: #c7cbff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file-meta { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
 
   .tool-indicator {
+    display: inline-flex; align-items: center; gap: 6px;
     font-size: 12px;
-    color: #64748b;
-    padding: 4px 0;
-    font-style: italic;
+    color: var(--accent-2);
+    padding: 3px 0;
+    font-style: normal;
   }
+  .tool-indicator svg { width: 14px; height: 14px; flex-shrink: 0; }
 
-  /* 代码审查卡片 */
-  .code-review-card {
-    max-width: 780px;
-    margin: 10px 20px;
-    margin-left: calc(20px + 44px);  /* 对齐助手气泡 */
-    border: 1px solid #1e3a5f;
-    border-radius: 10px;
-    overflow: hidden;
-    background: #0d1117;
+  /* 工具调用状态行：固定在助手气泡首行，原地刷新 + 呼吸提示 */
+  .tool-status-line {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 12px; color: var(--accent-2);
+    padding: 1px 0 7px; line-height: 1.4; font-style: normal;
   }
+  .tool-status-line svg { width: 14px; height: 14px; flex-shrink: 0; }
+  .tool-status-line.active { animation: breathe 1.6s ease-in-out infinite; }
+  .tool-status-line.done { color: var(--text-faint); opacity: .6; }
+  @keyframes breathe { 0%,100% { opacity: .42 } 50% { opacity: 1 } }
+
+  /* ── 代码审查卡片 ── */
+  .code-review-card {
+    max-width: 800px;
+    margin: 12px auto;
+    margin-left: calc(50% - 400px + 45px);
+    border: 1px solid #232a3d;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #0d1018;
+    box-shadow: var(--shadow);
+    animation: rise 0.28s cubic-bezier(.2,.7,.3,1) both;
+  }
+  @media (max-width: 920px) { .code-review-card { margin-left: 65px; margin-right: 20px; } }
   .code-review-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 10px 14px;
-    background: #161b22;
-    border-bottom: 1px solid #1e3a5f;
+    padding: 11px 15px;
+    background: #12161f;
+    border-bottom: 1px solid #1f2636;
   }
   .code-review-title {
+    display: inline-flex; align-items: center; gap: 7px;
     font-size: 13px;
     font-weight: 600;
-    color: #58a6ff;
-    font-family: monospace;
+    color: #a5b4fc;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
   }
+  .code-review-title svg { width: 15px; height: 15px; }
   .code-review-actions { display: flex; gap: 8px; }
   .btn-activate {
-    font-size: 12px; padding: 5px 14px;
-    background: #238636; border: 1px solid #2ea043;
-    color: #fff; border-radius: 6px; cursor: pointer;
-    font-weight: 600;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12.5px; padding: 6px 14px;
+    background: var(--accent-grad); border: none;
+    color: #fff; border-radius: 8px; cursor: pointer;
+    font-weight: 600; transition: filter 0.15s, opacity 0.15s;
   }
-  .btn-activate:hover { background: #2ea043; }
-  .btn-activate:disabled { background: #1a3a1f; color: #666; cursor: not-allowed; }
+  .btn-activate svg { width: 14px; height: 14px; flex-shrink: 0; }
+  .btn-activate:hover { filter: brightness(1.1); }
+  .btn-activate:disabled { background: #2a2030; color: #6b5a72; cursor: not-allowed; filter: none; }
   .btn-dismiss {
-    font-size: 12px; padding: 5px 10px;
-    background: #21262d; border: 1px solid #30363d;
-    color: #8b949e; border-radius: 6px; cursor: pointer;
+    font-size: 12.5px; padding: 6px 12px;
+    background: var(--bg-3); border: 1px solid var(--border);
+    color: var(--text-dim); border-radius: 8px; cursor: pointer;
+    transition: all 0.15s;
   }
-  .btn-dismiss:hover { background: #30363d; }
+  .btn-dismiss:hover { background: var(--bg-hover); color: #fff; }
   .code-block {
-    padding: 14px;
-    overflow-x: auto;
-    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    padding: 15px;
+    overflow: auto;
+    font-family: "JetBrains Mono", "Fira Code", ui-monospace, "Cascadia Code", monospace;
     font-size: 12.5px;
-    line-height: 1.6;
+    line-height: 1.65;
     color: #e6edf3;
     white-space: pre;
     max-height: 420px;
-    overflow-y: auto;
   }
   .code-review-footer {
-    padding: 8px 14px;
-    font-size: 11px;
-    color: #484f58;
-    border-top: 1px solid #161b22;
+    padding: 9px 15px;
+    font-size: 11.5px;
+    color: var(--text-faint);
+    border-top: 1px solid #161b26;
   }
 
   /* 验证横幅 */
   .validation-banner {
-    padding: 8px 14px;
-    font-size: 12px;
-    line-height: 1.5;
-    border-bottom: 1px solid #161b22;
+    padding: 9px 15px;
+    font-size: 12.5px;
+    line-height: 1.55;
+    border-bottom: 1px solid #161b26;
   }
-  .validation-banner ul { margin: 4px 0 0 16px; }
+  .validation-banner ul { margin: 5px 0 0 18px; }
   .validation-banner li { margin: 2px 0; }
-  .validation-banner.error   { background: #2d1117; color: #f85149; }
-  .validation-banner.warning { background: #2d2500; color: #e3b341; }
-  .validation-banner.ok      { background: #0d2818; color: #3fb950; }
+  .validation-banner.error   { background: rgba(248,113,113,0.08); color: var(--red); }
+  .validation-banner.warning { background: rgba(251,191,36,0.08); color: var(--yellow); }
+  .validation-banner.ok      { background: rgba(52,211,153,0.08); color: var(--green); }
 
-  /* 拖拽遮罩 */
+  /* ── 拖拽遮罩 ── */
   #drop-overlay {
     display: none;
     position: fixed; inset: 0;
-    background: #0f0f0fcc;
-    border: 3px dashed #3b82f6;
+    background: rgba(10,11,15,0.82);
+    backdrop-filter: blur(4px);
     z-index: 100;
     align-items: center;
     justify-content: center;
-    font-size: 20px;
-    color: #60a5fa;
     pointer-events: none;
   }
   #drop-overlay.active { display: flex; }
+  .drop-card {
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    padding: 44px 64px;
+    border: 2px dashed var(--accent);
+    border-radius: 20px;
+    background: rgba(99,102,241,0.06);
+    color: #c7cbff; font-size: 17px; font-weight: 600;
+  }
+  .drop-card svg { width: 44px; height: 44px; stroke: var(--accent-2); }
 
-  /* 输入区 */
+  /* ── 输入区 ── */
   footer {
-    padding: 12px 20px 16px;
-    border-top: 1px solid #1e1e1e;
-    background: #141414;
+    padding: 12px 20px 18px;
+    border-top: 1px solid var(--border-soft);
+    background: rgba(18, 21, 30, 0.72);
+    backdrop-filter: saturate(160%) blur(14px);
+    -webkit-backdrop-filter: saturate(160%) blur(14px);
   }
 
-  /* 上传进度条 */
   #upload-bar {
     display: none;
-    max-width: 860px;
-    margin: 0 auto 8px;
+    max-width: 880px;
+    margin: 0 auto 9px;
     height: 3px;
-    background: #1e1e1e;
-    border-radius: 2px;
+    background: var(--bg-3);
+    border-radius: 3px;
     overflow: hidden;
   }
   #upload-bar.active { display: block; }
   #upload-progress {
     height: 100%;
-    background: #3b82f6;
+    background: var(--accent-grad);
     width: 0%;
     transition: width 0.2s;
   }
 
-  .input-row {
+  .input-shell {
     display: flex;
     gap: 8px;
-    max-width: 860px;
+    max-width: 880px;
     margin: 0 auto;
     align-items: flex-end;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 7px 7px 7px 8px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .input-shell:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
   }
 
-  /* 上传按钮 */
-  #upload-btn {
-    width: 44px; height: 44px;
-    background: #1e1e1e;
-    border: 1px solid #2a2a2a;
+  .icon-btn {
+    width: 38px; height: 38px;
+    background: transparent;
+    border: none;
     border-radius: 10px;
-    color: #666; font-size: 20px;
-    cursor: pointer; flex-shrink: 0;
+    color: var(--text-faint); cursor: pointer; flex-shrink: 0;
     display: flex; align-items: center; justify-content: center;
     transition: all 0.15s;
   }
-  #upload-btn:hover { background: #2a2a2a; color: #aaa; border-color: #3b82f6; }
+  .icon-btn svg { width: 19px; height: 19px; }
+  .icon-btn:hover { background: var(--bg-3); color: var(--text-dim); }
 
   #input {
     flex: 1;
-    background: #1e1e1e;
-    border: 1px solid #2a2a2a;
-    border-radius: 10px;
-    color: #e8e8e8;
-    font-size: 14px;
-    padding: 11px 14px;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-size: 14.5px;
+    padding: 9px 4px;
     resize: none;
     line-height: 1.5;
     max-height: 160px;
-    min-height: 44px;
+    min-height: 38px;
     outline: none;
     font-family: inherit;
   }
-  #input:focus { border-color: #3b5bdb; }
-  #input::placeholder { color: #3a3a3a; }
+  #input::placeholder { color: var(--text-faint); }
 
   #send-btn {
-    width: 44px; height: 44px;
-    background: #2563eb;
-    border: none; border-radius: 10px;
-    color: #fff; font-size: 18px;
+    width: 38px; height: 38px;
+    background: var(--accent-grad);
+    border: none; border-radius: 11px;
+    color: #fff;
     cursor: pointer; flex-shrink: 0;
     display: flex; align-items: center; justify-content: center;
-    transition: background 0.15s;
+    transition: filter 0.15s, transform 0.1s, opacity 0.15s;
   }
-  #send-btn:hover { background: #1d4ed8; }
-  #send-btn:disabled { background: #1e2a4a; cursor: not-allowed; }
+  #send-btn svg { width: 18px; height: 18px; }
+  #send-btn:hover { filter: brightness(1.12); }
+  #send-btn:active { transform: scale(0.94); }
+  #send-btn:disabled { background: var(--bg-3); color: var(--text-faint); cursor: not-allowed; filter: none; }
 
-  .hint { font-size: 11px; color: #2a2a2a; text-align: center; margin-top: 8px; }
+  .hint { font-size: 11px; color: var(--text-faint); text-align: center; margin-top: 9px; opacity: 0.7; }
+  .hint kbd {
+    font-family: inherit; font-size: 10.5px;
+    background: var(--bg-3); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 5px; color: var(--text-dim);
+  }
+
+  /* ── 保险箱模态 ── */
+  #vault-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(6,7,11,0.7);
+    backdrop-filter: blur(6px);
+    z-index: 200;
+    align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  #vault-overlay.active { display: flex; }
+  .vault-modal {
+    width: 100%; max-width: 560px;
+    max-height: 86vh; overflow-y: auto;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    box-shadow: var(--shadow);
+    animation: rise 0.25s cubic-bezier(.2,.7,.3,1) both;
+  }
+  .vault-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-soft);
+    position: sticky; top: 0;
+    background: var(--bg-2);
+    border-radius: 18px 18px 0 0;
+    z-index: 1;
+  }
+  .vault-head svg { width: 18px; height: 18px; stroke: var(--accent-2); }
+  .vault-head h2 { font-size: 15px; font-weight: 650; color: #fff; }
+  .vault-head .close { margin-left: auto; }
+  .vault-note {
+    margin: 0 20px; margin-top: 14px;
+    font-size: 11.5px; line-height: 1.5;
+    color: var(--text-dim);
+    background: rgba(99,102,241,0.07);
+    border: 1px solid rgba(99,102,241,0.2);
+    border-radius: 10px; padding: 9px 12px;
+  }
+  .vault-section { padding: 16px 20px; }
+  .vault-section h3 {
+    font-size: 12px; font-weight: 600; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;
+  }
+  .cred-card {
+    border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px 14px;
+    margin-bottom: 10px; background: var(--bg-2);
+  }
+  .cred-top { display: flex; align-items: center; gap: 8px; }
+  .cred-alias { font-size: 14px; font-weight: 650; color: #fff; }
+  .cred-type {
+    font-size: 11px; color: var(--accent-2);
+    background: var(--accent-soft); border-radius: 5px; padding: 1px 7px;
+  }
+  .cred-exp { font-size: 11.5px; color: var(--text-dim); margin-left: auto; }
+  .cred-exp.warn { color: var(--yellow); }
+  .cred-exp.expired { color: var(--red); }
+  .cred-fields { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .cred-chip {
+    font-size: 11.5px; color: var(--text-dim);
+    background: var(--bg-3); border: 1px solid var(--border);
+    border-radius: 6px; padding: 3px 8px;
+    font-family: ui-monospace, monospace;
+  }
+  .cred-actions { margin-top: 10px; display: flex; gap: 7px; }
+  .cred-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12px; padding: 5px 11px; border-radius: 7px; cursor: pointer;
+    background: var(--bg-3); border: 1px solid var(--border); color: var(--text-dim);
+    transition: all 0.15s;
+  }
+  .cred-btn:hover { background: var(--bg-hover); color: #fff; }
+  .cred-btn.reveal { background: var(--accent-soft); border-color: rgba(99,102,241,0.4); color: #c7cbff; }
+  .cred-btn.danger:hover { background: rgba(248,113,113,0.15); color: var(--red); border-color: rgba(248,113,113,0.4); }
+  .cred-btn svg { width: 13px; height: 13px; }
+  .cred-empty { font-size: 12.5px; color: var(--text-faint); text-align: center; padding: 14px 0; }
+
+  /* 揭示出的真实值（仅本机） */
+  .reveal-row {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 7px; padding: 7px 10px;
+    background: rgba(52,211,153,0.07);
+    border: 1px solid rgba(52,211,153,0.25);
+    border-radius: 8px;
+  }
+  .reveal-k { font-size: 11.5px; color: var(--text-dim); min-width: 64px; }
+  .reveal-v { font-size: 13.5px; color: #eafff4; font-family: ui-monospace, monospace; font-weight: 600; letter-spacing: 0.5px; word-break: break-all; flex: 1; }
+  .reveal-copy { cursor: pointer; color: var(--text-faint); flex-shrink: 0; }
+  .reveal-copy:hover { color: var(--green); }
+  .reveal-copy svg { width: 14px; height: 14px; }
+
+  /* 表单 */
+  .vault-field { margin-bottom: 11px; }
+  .vault-field label { display: block; font-size: 11.5px; color: var(--text-dim); margin-bottom: 5px; }
+  .vault-input, .vault-select {
+    width: 100%; background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 9px; color: var(--text); font-size: 13.5px;
+    padding: 9px 11px; outline: none; font-family: inherit;
+  }
+  .vault-input:focus, .vault-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .vault-row2 { display: flex; gap: 10px; }
+  .vault-row2 > * { flex: 1; }
+  .vault-primary {
+    width: 100%; margin-top: 4px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    background: var(--accent-grad); border: none; color: #fff;
+    font-size: 13.5px; font-weight: 600; padding: 11px; border-radius: 10px; cursor: pointer;
+    transition: filter 0.15s;
+  }
+  .vault-primary:hover { filter: brightness(1.1); }
+  .vault-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+  .vault-primary svg { width: 16px; height: 16px; }
+  .vault-tabs { display: flex; gap: 6px; padding: 0 20px; margin-top: 14px; }
+  .vault-tab {
+    font-size: 12.5px; padding: 7px 13px; border-radius: 8px 8px 0 0; cursor: pointer;
+    color: var(--text-faint); border: 1px solid transparent;
+  }
+  .vault-tab.active { color: #fff; background: var(--bg-2); border-color: var(--border); border-bottom-color: transparent; }
+  .vault-status { font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .vault-status.ok { color: var(--green); }
+  .vault-status.err { color: var(--red); }
+  .vault-divider { height: 1px; background: var(--border-soft); margin: 0 20px; }
+
+  /* 证件 / 文档 大分区切换 */
+  .vault-kindtabs { display: flex; gap: 8px; margin: 4px 0 14px; }
+  .vault-kind {
+    flex: 1; font-size: 13px; padding: 9px 10px; cursor: pointer;
+    background: var(--bg-3); color: var(--text-dim);
+    border: 1px solid var(--border); border-radius: 10px; transition: all 0.15s;
+  }
+  .vault-kind:hover { color: #fff; }
+  .vault-kind.active { color: #fff; background: var(--accent-soft); border-color: var(--accent-ring); }
+  /* 文档摘要字段编辑行 */
+  .df-row { display: flex; gap: 7px; margin-bottom: 7px; }
+  .df-row .vault-input { flex: 1; }
+  .df-row .df-key { max-width: 38%; }
+  .df-row .df-del {
+    flex-shrink: 0; width: 30px; border: 1px solid var(--border); background: var(--bg-3);
+    color: var(--text-faint); border-radius: 8px; cursor: pointer; font-size: 15px;
+  }
+  .df-row .df-del:hover { color: var(--red); border-color: rgba(248,113,113,0.4); }
+  .ver-row {
+    display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim);
+    padding: 6px 0; border-top: 1px solid var(--border-soft);
+  }
+  .ver-row .ver-cur { color: var(--green); font-size: 11px; }
+
+  /* ── 统一右侧抽屉（情报台 / 定时任务 / 保险箱 / 设置）────────────────────── */
+  #drawer-scrim {
+    position: fixed; inset: 0;
+    background: rgba(6,7,11,0.55);
+    backdrop-filter: blur(2px);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s; z-index: 190;
+  }
+  #drawer-scrim.active { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed; top: 0; right: 0; bottom: 0;
+    width: 460px; max-width: 92vw;
+    background: var(--bg-1);
+    border-left: 1px solid var(--border);
+    box-shadow: -12px 0 40px rgba(0,0,0,0.4);
+    transform: translateX(100%);
+    transition: transform 0.24s cubic-bezier(.2,.7,.3,1);
+    z-index: 200; display: flex; flex-direction: column;
+  }
+  .drawer.open { transform: none; }
+  .drawer-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px; border-bottom: 1px solid var(--border-soft);
+    background: var(--bg-2); position: sticky; top: 0; z-index: 2;
+  }
+  .drawer-tabs { display: flex; gap: 4px; flex: 1; overflow-x: auto; }
+  .dtab {
+    font-size: 13px; padding: 7px 12px; border-radius: 9px; cursor: pointer;
+    background: transparent; border: 1px solid transparent; color: var(--text-faint);
+    white-space: nowrap; transition: all 0.15s;
+  }
+  .dtab:hover { color: var(--text-dim); background: var(--bg-3); }
+  .dtab.active { color: #fff; background: var(--accent-soft); border-color: var(--accent-ring); }
+  .drawer-body { flex: 1; overflow-y: auto; }
+  .dpanel { display: none; padding: 16px; }
+  .dpanel.active { display: block; }
+  @media (max-width: 560px) { .drawer { width: 100vw; max-width: 100vw; } }
+
+  /* 情报台面板（由原 /intel 迁入，按面板作用域命名，避免与其它样式冲突） */
+  #panel-intel .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:14px; }
+  #panel-intel .mc { background:var(--bg-2); border:1px solid var(--border); border-radius:10px; padding:10px; }
+  #panel-intel .mc .l { font-size:11px; color:var(--text-dim); }
+  #panel-intel .mc .v { font-size:19px; font-weight:600; margin-top:2px; }
+  #panel-intel .sec { margin-bottom:14px; }
+  #panel-intel .sec h2 { font-size:12.5px; color:var(--text-dim); font-weight:500; margin:0 0 8px 2px; }
+  #panel-intel .card { background:var(--bg-2); border:1px solid var(--border); border-radius:12px; padding:6px 14px; }
+  #panel-intel .item { padding:10px 0; border-top:1px solid var(--border-soft); display:flex; gap:10px; align-items:flex-start; }
+  #panel-intel .item:first-child { border-top:none; }
+  #panel-intel .pill { font-size:11px; padding:2px 8px; border-radius:8px; white-space:nowrap; flex:none; }
+  #panel-intel .sev5, #panel-intel .sev4 { background:rgba(248,113,113,.15); color:var(--red); }
+  #panel-intel .sev3 { background:rgba(251,191,36,.15); color:var(--yellow); }
+  #panel-intel .sevlow { background:var(--bg-3); color:var(--text-dim); }
+  #panel-intel .txt { flex:1; min-width:0; font-size:13px; line-height:1.5; }
+  #panel-intel a.src { color:var(--text-faint); font-size:12px; text-decoration:none; }
+  #panel-intel .bar { height:6px; background:var(--bg-3); border-radius:3px; margin-top:4px; overflow:hidden; }
+  #panel-intel .bar > i { display:block; height:6px; border-radius:3px; }
+  #panel-intel .rowflex { display:flex; justify-content:space-between; font-size:13px; align-items:center; }
+  #panel-intel .rev { padding:11px 0; border-top:1px solid var(--border-soft); }
+  #panel-intel .rev:first-child { border-top:none; }
+  #panel-intel .rev .act { display:flex; gap:8px; margin-top:8px; }
+  #panel-intel .chip { display:inline-flex; align-items:center; gap:6px; font-size:12px; padding:4px 10px; border-radius:8px; background:var(--bg-3); border:1px solid var(--border); }
+  #panel-intel .dot { width:7px; height:7px; border-radius:50%; }
+  #panel-intel .on { background:var(--green); } #panel-intel .off { background:var(--yellow); }
+  #panel-intel .muted { color:var(--text-faint); font-size:12px; padding:10px 0; }
+  /* 卡片仪表盘：三层 + 通用色调 + 行内动作 */
+  #panel-intel .tier { margin-bottom:8px; }
+  #panel-intel .tier-label { font-size:11px; letter-spacing:.5px; text-transform:uppercase; color:var(--text-faint); margin:14px 2px 8px; }
+  #panel-intel .tier:first-child .tier-label { margin-top:2px; }
+  #panel-intel .pill.tone-red { background:rgba(248,113,113,.15); color:var(--red); }
+  #panel-intel .pill.tone-yellow { background:rgba(251,191,36,.15); color:var(--yellow); }
+  #panel-intel .pill.tone-green { background:rgba(52,211,153,.15); color:var(--green); }
+  #panel-intel .pill.tone-dim { background:var(--bg-3); color:var(--text-dim); }
+  #panel-intel .dot.tone-red { background:var(--red); } #panel-intel .dot.tone-yellow { background:var(--yellow); }
+  #panel-intel .dot.tone-green { background:var(--green); } #panel-intel .dot.tone-dim { background:var(--text-faint); }
+  #panel-intel .rev-act { display:flex; gap:8px; margin-top:8px; }
+
+  /* 定时任务面板（由原 /schedules 迁入） */
+  /* 日历面板 */
+  #panel-calendar .cal-add { background:var(--bg-2); border:1px solid var(--border); border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:8px; margin-bottom:14px; }
+  #panel-calendar .cal-row { display:flex; gap:8px; align-items:center; }
+  #panel-calendar .cal-in { flex:1; min-width:0; background:var(--bg-3); border:1px solid var(--border); border-radius:8px; color:var(--text); padding:8px 10px; font-size:13px; }
+  #panel-calendar .cal-chk { font-size:12px; color:var(--text-dim); white-space:nowrap; display:flex; align-items:center; gap:5px; }
+  #panel-calendar .cal-head { display:flex; align-items:center; margin:0 2px 8px; }
+  #panel-calendar .cal-day { margin-bottom:12px; }
+  #panel-calendar .cal-date { font-size:12px; color:var(--text-dim); font-weight:600; margin:0 2px 6px; }
+  #panel-calendar .cal-item { display:flex; gap:10px; align-items:center; background:var(--bg-2); border:1px solid var(--border); border-radius:10px; padding:9px 12px; margin-bottom:6px; }
+  #panel-calendar .cal-time { font-size:12px; color:var(--text-dim); font-variant-numeric:tabular-nums; min-width:38px; }
+  #panel-calendar .cal-title { flex:1; min-width:0; font-size:13px; }
+  #panel-calendar .cal-tag { font-style:normal; font-size:11px; padding:1px 7px; border-radius:7px; margin-left:6px; background:var(--bg-3); color:var(--text-dim); }
+  #panel-calendar .cal-tag.t-rest { background:rgba(52,211,153,.15); color:var(--green); }
+  #panel-calendar .cal-tag.t-reminder { background:rgba(251,191,36,.15); color:var(--yellow); }
+  #panel-calendar .cal-tag.t-expiry { background:rgba(248,113,113,.15); color:var(--red); }
+  #panel-calendar .cal-del { background:none; border:none; color:var(--text-faint); font-size:12px; cursor:pointer; padding:2px 6px; }
+  #panel-calendar .cal-del:hover { color:var(--red); }
+
+  /* ── 全屏月历弹窗（Outlook 风格）────────────────────────────────────────── */
+  #calmodal { display:none; position:fixed; inset:0; background:rgba(6,7,11,.78); backdrop-filter:blur(6px); z-index:250; padding:18px; }
+  #calmodal.active { display:flex; }
+  .calmodal-box { width:100%; height:100%; max-width:1280px; margin:0 auto; background:var(--bg-1); border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow); display:flex; flex-direction:column; overflow:hidden; }
+  .calmodal-top { display:flex; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid var(--border-soft); background:var(--bg-2); }
+  .calmodal-top h2 { font-size:17px; font-weight:650; color:#fff; min-width:140px; }
+  .cal-nav { display:flex; gap:4px; }
+  .cal-nav button, .calmodal-top .btn-sm { background:var(--bg-3); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:6px 11px; font-size:13px; cursor:pointer; }
+  .cal-nav button:hover, .calmodal-top .btn-sm:hover { background:var(--accent-soft); }
+  .calmodal-main { flex:1; display:flex; min-height:0; }
+  .cal-grid-wrap { flex:1; display:flex; flex-direction:column; min-width:0; padding:10px 14px 14px; }
+  .cal-weekhead { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; margin-bottom:6px; }
+  .cal-weekhead div { font-size:12px; color:var(--text-dim); text-align:center; font-weight:600; padding:4px 0; }
+  .cal-grid { flex:1; display:grid; grid-template-columns:repeat(7,1fr); grid-auto-rows:1fr; gap:6px; min-height:0; }
+  .cal-cell { background:var(--bg-2); border:1px solid var(--border); border-radius:9px; padding:5px 6px; display:flex; flex-direction:column; gap:3px; overflow:hidden; cursor:pointer; transition:border-color .12s; }
+  .cal-cell:hover { border-color:var(--accent-ring); }
+  .cal-cell.oth { opacity:.4; }
+  .cal-cell.today { border-color:var(--accent); }
+  .cal-cell.sel { outline:2px solid var(--accent); }
+  .cal-cell .dnum { font-size:12px; color:var(--text-dim); font-variant-numeric:tabular-nums; align-self:flex-end; }
+  .cal-cell.today .dnum { color:var(--accent); font-weight:700; }
+  .cal-ev { font-size:11px; line-height:1.35; padding:2px 6px; border-radius:5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; background:var(--accent-soft); color:#cfe0ff; border-left:3px solid var(--accent); }
+  .cal-ev.k-rest { background:rgba(52,211,153,.14); color:var(--green); border-left-color:var(--green); }
+  .cal-ev.k-reminder { background:rgba(251,191,36,.14); color:var(--yellow); border-left-color:var(--yellow); }
+  .cal-ev.k-expiry { background:rgba(248,113,113,.14); color:var(--red); border-left-color:var(--red); }
+  .cal-ev.k-task { background:var(--bg-3); color:var(--text-dim); border-left-color:var(--text-faint); }
+  .cal-ev.k-key_date { background:rgba(167,139,250,.14); color:#c4b5fd; border-left-color:#a78bfa; }
+  .cal-more { font-size:10.5px; color:var(--text-faint); padding-left:4px; }
+  /* 右侧当日详情栏 */
+  .cal-side { width:320px; flex:none; border-left:1px solid var(--border-soft); display:flex; flex-direction:column; background:var(--bg-2); }
+  .cal-side-head { padding:12px 16px; border-bottom:1px solid var(--border-soft); font-size:14px; font-weight:600; }
+  .cal-side-body { flex:1; overflow-y:auto; padding:12px 16px; }
+  .cal-side-add { padding:12px 16px; border-top:1px solid var(--border-soft); display:flex; flex-direction:column; gap:7px; }
+  .cal-side .cal-in { width:100%; background:var(--bg-3); border:1px solid var(--border); border-radius:8px; color:var(--text); padding:7px 9px; font-size:13px; }
+  .cal-side .di { display:flex; gap:9px; align-items:center; background:var(--bg-1); border:1px solid var(--border); border-radius:9px; padding:8px 10px; margin-bottom:6px; }
+  .cal-side .di .t { flex:1; min-width:0; font-size:13px; }
+  .cal-side .di .tm { font-size:11px; color:var(--text-dim); }
+  @media (max-width:760px){ .cal-side { display:none; } #calmodal { padding:0; } .calmodal-box { border-radius:0; } }
+  #panel-schedules .card { background:var(--bg-2); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+  #panel-schedules .row { display:flex; align-items:center; gap:12px; padding:13px 14px; border-top:1px solid var(--border-soft); }
+  #panel-schedules .row:first-child { border-top:none; }
+  #panel-schedules .meta { flex:1; min-width:0; }
+  #panel-schedules .name { font-size:14px; font-weight:500; }
+  #panel-schedules .desc { font-size:12px; color:var(--text-faint); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #panel-schedules .chip { display:inline-flex; align-items:center; gap:6px; background:var(--bg-3); border:1px solid var(--border); border-radius:9px; padding:5px 10px; font-size:13px; cursor:pointer; color:var(--text); }
+  #panel-schedules .chip:hover { background:var(--bg-hover); }
+  #panel-schedules .chip.off { opacity:.45; pointer-events:none; }
+  #panel-schedules .sw { position:relative; width:42px; height:24px; flex:none; }
+  #panel-schedules .sw input { opacity:0; width:0; height:0; }
+  #panel-schedules .track { position:absolute; inset:0; background:var(--bg-3); border:1px solid var(--border); border-radius:999px; transition:.18s; }
+  #panel-schedules .knob { position:absolute; top:3px; left:3px; width:18px; height:18px; background:var(--text-faint); border-radius:50%; transition:.18s; }
+  #panel-schedules .sw input:checked + .track { background:var(--green); border-color:var(--green); }
+  #panel-schedules .sw input:checked + .track .knob { transform:translateX(18px); background:#fff; }
+  #panel-schedules .editor { margin:10px 0 4px; padding:12px; background:var(--bg-1); border:1px solid var(--border); border-radius:10px; display:none; }
+  #panel-schedules .editor.open { display:block; }
+  #panel-schedules .editor label { font-size:12px; color:var(--text-dim); display:block; margin:0 0 5px; }
+  #panel-schedules .erow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  #panel-schedules input[type=time], #panel-schedules select, #panel-schedules input[type=text] { background:var(--bg-3); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:7px 9px; font-size:13px; font-family:inherit; }
+  #panel-schedules .adv { margin-top:10px; font-size:12px; color:var(--text-faint); }
+  #panel-schedules .adv summary { cursor:pointer; }
+  #panel-schedules .adv input { width:100%; margin-top:6px; }
+  #panel-schedules .empty, #panel-schedules .err { padding:26px 12px; text-align:center; color:var(--text-faint); font-size:13px; }
+  #panel-schedules .tip { margin-top:14px; font-size:12px; color:var(--text-faint); display:flex; gap:6px; align-items:flex-start; }
+
+  /* 可启动任务预设目录 */
+  #panel-schedules .sched-sub { font-size:12px; color:var(--text-dim); font-weight:500; margin:2px 2px 9px; }
+  #panel-schedules .presets { display:flex; flex-direction:column; gap:10px; }
+  #panel-schedules .preset { background:var(--bg-2); border:1px solid var(--border); border-radius:12px; padding:12px 14px; }
+  #panel-schedules .preset .name { font-size:14px; font-weight:500; }
+  #panel-schedules .preset .desc { font-size:12px; color:var(--text-faint); margin:4px 0 11px; line-height:1.55; white-space:normal; }
+  #panel-schedules .preset .erow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  #panel-schedules .preset .btn.start { background:var(--green); }
+  #panel-schedules .preset .btn:disabled { opacity:.5; cursor:default; }
+  #panel-schedules .preset.started { opacity:.7; }
+
+  /* 抽屉内通用按钮（情报台/定时任务共用） */
+  #drawer .btn { background:var(--accent); color:#fff; border:none; border-radius:8px; font-size:13px; padding:6px 12px; cursor:pointer; font-family:inherit; }
+  #drawer .ghost { background:transparent; color:var(--text-dim); border:1px solid var(--border); border-radius:8px; font-size:13px; padding:6px 12px; cursor:pointer; font-family:inherit; }
+
+  /* 设置面板 */
+  #panel-settings .set-row { padding:14px 0; border-top:1px solid var(--border-soft); }
+  #panel-settings .set-row:first-child { border-top:none; }
+  #panel-settings .set-row h3 { font-size:13.5px; font-weight:600; color:#fff; margin:0 0 4px; }
+  #panel-settings .set-row p { font-size:12px; color:var(--text-dim); margin:0 0 9px; line-height:1.5; }
+
+  /* 抽屉里复用保险箱样式时去掉模态外壳的圆角粘顶 */
+  #panel-vault .vault-head { border-radius:0; position:static; }
+  #panel-vault .vault-note { margin-left:0; margin-right:0; }
+  #panel-vault .vault-section, #panel-vault .vault-tabs, #panel-vault .vault-divider { padding-left:0; padding-right:0; margin-left:0; margin-right:0; }
+
+  /* 全局轻提示 */
+  .toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:var(--bg-3);
+    border:1px solid var(--border); color:var(--text); padding:9px 16px; border-radius:10px; font-size:13px;
+    opacity:0; transition:.2s; pointer-events:none; z-index:300; }
+  .toast.show { opacity:1; }
 </style>
 </head>
 <body>
 
-<div id="drop-overlay">松开鼠标上传文件 📄</div>
+<div id="drop-overlay">
+  <div class="drop-card">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M12 3v13"/><path d="m7 8 5-5 5 5"/>
+    </svg>
+    松开鼠标上传文件
+  </div>
+</div>
 
 <header>
-  <div class="status-dot" id="dot"></div>
-  <h1>贾维斯</h1>
+  <div class="brand">
+    <span class="brand-logo">
+      <svg width="20" height="20" viewBox="0 0 48 48" fill="none">
+        <ellipse cx="24" cy="24" rx="15" ry="6.5" stroke="#fff" stroke-width="2.4" opacity="0.9" transform="rotate(-28 24 24)"/>
+        <circle cx="24" cy="24" r="4.8" fill="#fff"/>
+        <circle cx="36" cy="17" r="2.4" fill="#fff"/>
+      </svg>
+    </span>
+    <div class="status-dot" id="dot"></div>
+    <h1>JARVIS</h1>
+  </div>
   <div class="actions">
-    <button class="btn-sm" onclick="showMemory()">记忆库</button>
-    <button class="btn-sm" onclick="resetSession()">重置会话</button>
+    <button class="btn-sm" onclick="openDrawer()" title="功能面板（情报台 / 定时任务 / 保险箱 / 设置）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      功能
+    </button>
   </div>
 </header>
 
@@ -304,16 +836,305 @@
 
 <footer>
   <div id="upload-bar"><div id="upload-progress"></div></div>
-  <div class="input-row">
-    <button id="upload-btn" title="上传文件（或直接拖拽到页面）" onclick="triggerUpload()">📎</button>
+  <div class="input-shell">
+    <button id="upload-btn" class="icon-btn" title="上传文件（或直接拖拽到页面）" onclick="triggerUpload()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+    </button>
     <input type="file" id="file-input" style="display:none"
       accept=".pdf,.docx,.doc,.xlsx,.xls,.xlsm,.pptx,.ppt,.csv,.txt,.md,.json,.yaml,.yml,.jpg,.jpeg,.png,.gif,.webp,.bmp"
       onchange="handleFileSelect(this.files[0])">
     <textarea id="input" placeholder="和贾维斯说话，或拖拽文件到页面…" rows="1"></textarea>
-    <button id="send-btn" onclick="sendMessage()">↑</button>
+    <button id="send-btn" onclick="sendMessage()" title="发送">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+    </button>
   </div>
-  <p class="hint">Enter 发送 · Shift+Enter 换行 · 📎 或拖拽上传文件</p>
+  <p class="hint"><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · 附件按钮或拖拽上传文件</p>
 </footer>
+
+<!-- ── 统一右侧抽屉 ── -->
+<div id="drawer-scrim" onclick="closeDrawer()"></div>
+<aside id="drawer" class="drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <div class="drawer-tabs">
+      <button class="dtab active" data-panel="intel"     onclick="switchPanel('intel')">情报台</button>
+      <button class="dtab"        data-panel="calendar"  onclick="switchPanel('calendar')">日历</button>
+      <button class="dtab"        data-panel="schedules" onclick="switchPanel('schedules')">定时任务</button>
+      <button class="dtab"        data-panel="vault"     onclick="switchPanel('vault')">保险箱</button>
+      <button class="dtab"        data-panel="settings"  onclick="switchPanel('settings')">设置</button>
+    </div>
+    <button class="btn-sm" onclick="closeDrawer()" title="关闭">关闭</button>
+  </div>
+  <div class="drawer-body">
+
+    <!-- 情报台 -->
+    <section class="dpanel active" id="panel-intel">
+      <div class="sec" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <span style="font-size:12px;color:var(--text-faint)" id="intel-date"></span>
+        <a class="src" href="/reports" style="color:var(--accent);margin-left:6px">报告中心 ›</a>
+        <button class="btn" style="margin-left:auto;font-size:12px;padding:5px 11px" onclick="runCollect(this)">采集今日信号</button>
+        <button class="btn" style="font-size:12px;padding:5px 11px" onclick="runProspect(this)">运行潜客名单</button>
+        <span class="ghost" style="cursor:pointer;padding:4px 10px" onclick="loadIntel()">⟳ 刷新</span>
+      </div>
+      <div id="intel-root"><div class="muted">加载中…</div></div>
+    </section>
+
+    <!-- 日历（议程视图 + 快速新建）-->
+    <section class="dpanel" id="panel-calendar">
+      <div class="cal-add">
+        <input id="cal-title" class="cal-in" placeholder="事件标题，如 客户电话">
+        <div class="cal-row">
+          <input id="cal-start" class="cal-in" type="datetime-local">
+          <label class="cal-chk"><input type="checkbox" id="cal-allday"> 全天</label>
+        </div>
+        <div class="cal-row">
+          <select id="cal-rrule" class="cal-in">
+            <option value="">不重复</option>
+            <option value="FREQ=DAILY">每天</option>
+            <option value="FREQ=WEEKLY">每周</option>
+            <option value="FREQ=MONTHLY">每月</option>
+            <option value="FREQ=YEARLY">每年</option>
+          </select>
+          <select id="cal-notify" class="cal-in">
+            <option value="">不提醒</option>
+            <option value='{"type":"before","minutes":15}'>提前 15 分钟</option>
+            <option value='{"type":"before","minutes":60}'>提前 1 小时</option>
+            <option value='{"type":"before","minutes":1440}'>提前 1 天</option>
+            <option value='{"type":"at","time":"09:00"}'>当天 09:00</option>
+          </select>
+        </div>
+        <button class="btn" style="width:100%;justify-content:center" onclick="addCalEvent(this)">添加到日历</button>
+      </div>
+      <div class="cal-head">
+        <span style="font-size:12px;color:var(--text-faint)">未来 30 天</span>
+        <button class="btn" style="margin-left:auto;font-size:12px;padding:5px 11px" onclick="openCalModal()">📅 全屏月历</button>
+        <span class="ghost" style="cursor:pointer;padding:4px 10px" onclick="loadCalendar()">⟳ 刷新</span>
+      </div>
+      <div id="cal-agenda"><div class="muted">加载中…</div></div>
+      <div class="tip"><span>💡</span><span>更复杂的安排直接对贾维斯说，如「每周二上午十点提醒我开周会」。</span></div>
+    </section>
+
+    <!-- 定时任务 -->
+    <section class="dpanel" id="panel-schedules">
+      <div class="sched-sub">可启动任务</div>
+      <div id="sched-presets" class="presets"><div class="empty">加载中…</div></div>
+      <div class="sched-sub" style="margin-top:18px">已启动的任务</div>
+      <div id="sched-list" class="card"><div class="empty">加载中…</div></div>
+      <div class="tip"><span>💡</span><span>复杂调度仍可直接对贾维斯说，如「潜客清单改成只工作日推」。</span></div>
+    </section>
+
+    <!-- 证件保险箱 -->
+    <section class="dpanel" id="panel-vault">
+    <div class="vault-note">所有信息在本机 AES 加密存储。证件用本地 OCR、照片不上传；文档摘要会把原件文字经云端 AI 提取一次，原件本身只在本机加密保存（保留版本历史）。</div>
+
+    <div class="vault-kindtabs">
+      <button class="vault-kind active" id="kind-cred" onclick="switchVaultKind('cred')">证件 / 银行卡</button>
+      <button class="vault-kind" id="kind-doc" onclick="switchVaultKind('doc')">文档（保单 / 合同）</button>
+    </div>
+
+    <!-- ============ 证件区 ============ -->
+    <div id="vault-kind-cred">
+    <div class="vault-section">
+      <h3>已保存</h3>
+      <div id="cred-list"><div class="cred-empty">加载中…</div></div>
+    </div>
+
+    <div class="vault-divider"></div>
+
+    <div class="vault-tabs">
+      <div class="vault-tab active" id="tab-ocr" onclick="switchTab('ocr')">上传照片识别</div>
+      <div class="vault-tab" id="tab-manual" onclick="switchTab('manual')">手动录入</div>
+    </div>
+
+    <!-- OCR 上传 -->
+    <div class="vault-section" id="pane-ocr">
+      <div class="vault-field"><label>类型</label>
+        <select class="vault-select" id="ocr-type">
+          <option value="auto">自动识别</option>
+          <option value="bank_card">银行卡</option>
+          <option value="id_card">身份证</option>
+          <option value="passport">护照</option>
+          <option value="driver_license">驾驶证</option>
+          <option value="other">其它</option>
+        </select>
+      </div>
+      <input type="file" id="cred-file" style="display:none" multiple accept=".jpg,.jpeg,.png,.webp,.bmp" onchange="scanCredential()">
+      <button class="vault-primary" onclick="document.getElementById('cred-file').click()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M12 3v13"/><path d="m7 8 5-5 5 5"/></svg>
+        选择证件照片（可多选正反面，本地识别）
+      </button>
+      <div class="vault-status" id="ocr-status"></div>
+
+      <!-- 识别后确认表单（本机预填，可改；CVV 手填）-->
+      <div id="ocr-confirm" style="display:none;margin-top:14px;border-top:1px solid var(--border-soft);padding-top:14px">
+        <h3 style="margin-bottom:10px">核对并补全</h3>
+        <div class="vault-field"><label>代号</label><input class="vault-input" id="oc-alias" placeholder="如 招行卡"></div>
+        <div id="oc-fields"></div>
+        <div class="vault-field"><label>有效期 (YYYY-MM-DD 或 长期，可改)</label><input class="vault-input" id="oc-expiry" placeholder="2030-01-01"></div>
+        <details id="oc-raw-wrap" style="margin-bottom:11px">
+          <summary style="font-size:11.5px;color:var(--text-dim);cursor:pointer">查看 OCR 原文（识别不准时照此手填）</summary>
+          <div id="oc-raw" style="margin-top:7px;font-size:11.5px;line-height:1.7;color:var(--text-dim);font-family:ui-monospace,monospace;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 11px;max-height:160px;overflow:auto;white-space:pre-wrap"></div>
+        </details>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-dim);margin-bottom:11px;cursor:pointer">
+          <input type="checkbox" id="oc-keep" checked style="width:15px;height:15px;accent-color:var(--accent)">
+          同时把证件照片加密保存到本地（仅本机可查看）
+        </label>
+        <button class="vault-primary" onclick="confirmSaveCredential()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          确认并加密保存
+        </button>
+      </div>
+    </div>
+
+    <!-- 手动录入 -->
+    <div class="vault-section" id="pane-manual" style="display:none">
+      <div class="vault-row2">
+        <div class="vault-field"><label>代号</label><input class="vault-input" id="m-alias" placeholder="如 招行卡"></div>
+        <div class="vault-field"><label>类型</label>
+          <select class="vault-select" id="m-type" onchange="renderManualFields()">
+            <option value="bank_card">银行卡</option>
+            <option value="id_card">身份证</option>
+            <option value="passport">护照</option>
+            <option value="driver_license">驾驶证</option>
+            <option value="other">其它</option>
+          </select>
+        </div>
+      </div>
+      <div id="m-fields"></div>
+      <div class="vault-field"><label>有效期 (YYYY-MM-DD，可选)</label><input class="vault-input" id="m-expiry" placeholder="2030-01-01"></div>
+      <button class="vault-primary" onclick="manualSave()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+        加密保存
+      </button>
+      <div class="vault-status" id="m-status"></div>
+    </div>
+    </div><!-- /vault-kind-cred -->
+
+    <!-- ============ 文档区 ============ -->
+    <div id="vault-kind-doc" style="display:none">
+      <div class="vault-section">
+        <h3>已保存文档</h3>
+        <div id="doc-list"><div class="cred-empty">加载中…</div></div>
+      </div>
+
+      <div class="vault-divider"></div>
+
+      <div class="vault-section">
+        <input type="file" id="doc-file" style="display:none" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.md,.png,.jpg,.jpeg,.webp,.bmp" onchange="scanDocument()">
+        <div class="vault-field"><label>类型</label>
+          <select class="vault-select" id="doc-type">
+            <option value="auto">自动识别</option>
+            <option value="policy">保单</option>
+            <option value="contract">合同</option>
+            <option value="agreement">协议</option>
+            <option value="other">其它文档</option>
+          </select>
+        </div>
+        <button class="vault-primary" onclick="document.getElementById('doc-file').click()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+          上传文档，自动提取摘要
+        </button>
+        <button class="cred-btn" style="margin-top:8px" onclick="openDocForm(null)">或手动新建空白文档</button>
+        <div class="vault-status" id="doc-status"></div>
+
+        <!-- 录入 / 编辑 表单（新建与「更新」共用）-->
+        <div id="doc-form" style="display:none;margin-top:14px;border-top:1px solid var(--border-soft);padding-top:14px">
+          <h3 id="doc-form-title" style="margin-bottom:10px">核对摘要并保存</h3>
+          <div class="vault-row2">
+            <div class="vault-field"><label>代号</label><input class="vault-input" id="df-alias" placeholder="如 车险保单"></div>
+            <div class="vault-field"><label>类型</label>
+              <select class="vault-select" id="df-type">
+                <option value="policy">保单</option>
+                <option value="contract">合同</option>
+                <option value="agreement">协议</option>
+                <option value="other">其它文档</option>
+              </select>
+            </div>
+          </div>
+          <label style="display:block;font-size:11.5px;color:var(--text-dim);margin-bottom:5px">摘要字段（可改、可增删）</label>
+          <div id="df-fields"></div>
+          <button class="cred-btn" onclick="addDocFieldRow('','')" style="margin-bottom:11px">+ 添加字段</button>
+          <div class="vault-field"><label>到期日 (YYYY-MM-DD，可选；用于到期提醒)</label><input class="vault-input" id="df-expiry" placeholder="2030-01-01"></div>
+          <div class="vault-field" id="df-replace-wrap">
+            <label id="df-replace-label">替换 / 上传原件（选填，将作为新版本）</label>
+            <input type="file" id="df-replace-file" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.md,.png,.jpg,.jpeg,.webp,.bmp" onchange="stageDocReplacement()" style="font-size:12px;color:var(--text-dim)">
+            <div class="vault-status" id="df-replace-status"></div>
+          </div>
+          <button class="vault-primary" onclick="saveDocForm()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            确认并加密保存
+          </button>
+        </div>
+      </div>
+    </div><!-- /vault-kind-doc -->
+    </section>
+
+    <!-- 设置 -->
+    <section class="dpanel" id="panel-settings">
+      <div class="set-row">
+        <h3>用户档案 · 长期记忆</h3>
+        <p>这里的事实会【每轮】注入对话，跨会话长期记住、不会随历史淡化。贾维斯也会在你透露稳定偏好时自动追加。保持精简（上限 40 条）。</p>
+        <div id="profile-list" style="margin-bottom:10px"></div>
+        <div class="erow" style="display:flex;gap:8px">
+          <input type="text" id="profile-input" placeholder="如：风险偏好 = 保守" style="flex:1;background:var(--bg-3);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 9px;font-size:13px;font-family:inherit">
+          <button class="btn" onclick="addProfileFact()">添加</button>
+        </div>
+      </div>
+      <div class="set-row">
+        <h3>连接 · HubSpot</h3>
+        <p>跑潜客流水线匹配 HubSpot 时需要在本机登录一次；平时情报台只显示连接状态灯。</p>
+        <div id="settings-hubspot"></div>
+      </div>
+      <div class="set-row">
+        <h3>当前会话</h3>
+        <p>重置会清空当前对话历史（含已持久化的记录），无法恢复。用户档案不受影响。</p>
+        <button class="ghost" onclick="resetSession()">重置会话</button>
+      </div>
+      <div class="set-row">
+        <h3>关于</h3>
+        <p>贾维斯 · 本地优先个人 AI 助理。对话历史持久化在本机，支持刷新 / 换设备回看。</p>
+      </div>
+    </section>
+
+  </div><!-- drawer-body -->
+</aside>
+
+<div id="toast" class="toast"></div>
+
+<!-- 全屏月历弹窗（Outlook 风格）-->
+<div id="calmodal" onclick="if(event.target===this)closeCalModal()">
+  <div class="calmodal-box">
+    <div class="calmodal-top">
+      <h2 id="calmodal-title">—</h2>
+      <div class="cal-nav">
+        <button onclick="calMonthShift(-1)" title="上个月">‹</button>
+        <button onclick="calGotoToday()">今天</button>
+        <button onclick="calMonthShift(1)" title="下个月">›</button>
+      </div>
+      <button class="btn-sm" style="margin-left:auto" onclick="closeCalModal()">关闭</button>
+    </div>
+    <div class="calmodal-main">
+      <div class="cal-grid-wrap">
+        <div class="cal-weekhead"><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div><div>日</div></div>
+        <div class="cal-grid" id="calmodal-grid"></div>
+      </div>
+      <aside class="cal-side">
+        <div class="cal-side-head" id="calside-title">选择日期</div>
+        <div class="cal-side-body" id="calside-body"><div class="muted">点左侧某天查看 / 新建。</div></div>
+        <div class="cal-side-add">
+          <input id="calside-input" class="cal-in" placeholder="新建事件标题">
+          <input id="calside-time" class="cal-in" type="time" value="09:00">
+          <select id="calside-notify" class="cal-in">
+            <option value="">不提醒</option>
+            <option value='{"type":"before","minutes":15}'>提前 15 分钟</option>
+            <option value='{"type":"before","minutes":60}'>提前 1 小时</option>
+            <option value='{"type":"before","minutes":1440}'>提前 1 天</option>
+          </select>
+          <button class="btn" style="justify-content:center" onclick="calSideAdd(this)">添加</button>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
 
 <script>
 const messagesEl  = document.getElementById("messages");
@@ -327,10 +1148,62 @@ const dropOverlay = document.getElementById("drop-overlay");
 let ws = null;
 let currentBubble = null;
 
+// SVG 图标（供 JS 动态生成的卡片使用）
+const ICON = {
+  wrench: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.6 5l-6.4 6.4a2 2 0 0 0 2.8 2.8l6.4-6.4a4 4 0 0 0 5-5.6l-2.5 2.5-2.1-2.1 2.4-2.6Z"/></svg>',
+  gear:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 15H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 9 4.6V3a2 2 0 1 1 4 0v.1A1.6 1.6 0 0 0 15 4.6l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1Z"/></svg>',
+  check:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+  bolt:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg>',
+  down:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>',
+};
+
 // ── WebSocket ──────────────────────────────────────────────────────────────
 
+// 会话 ID：存 localStorage —— 关标签、刷新、换设备都延续同一段对话（配合后端持久化历史）
+const JARVIS_SESSION_ID = (() => {
+  let id = localStorage.getItem("jarvis_session_id");
+  if (!id) {
+    id = (window.crypto && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : String(Date.now()) + Math.random().toString(16).slice(2);
+    localStorage.setItem("jarvis_session_id", id);
+  }
+  return id;
+})();
+
+let _historyLoaded = false;
+
+// 加载时回放持久化的对话历史，让刷新/换设备后仍能看到此前的对话
+async function loadHistory() {
+  if (_historyLoaded) return;
+  _historyLoaded = true;
+  try {
+    const msgs = await (await fetch("/api/history")).json();
+    if (!Array.isArray(msgs) || !msgs.length) return;
+    for (const m of msgs) {
+      if (m.kind === "file" && m.content && m.content.filename) {
+        addFileDownloadCard(m.content.filename, m.content.url, m.content.size || 0);
+      } else if (m.role === "user") {
+        addUserMessage(typeof m.content === "string" ? m.content : JSON.stringify(m.content));
+      } else if (m.role === "assistant") {
+        const b = createAssistantBubble();
+        b._raw = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+        renderBubbleMarkdown(b);
+      }
+    }
+    addSystemMessage("— 以上为此前的对话历史 —");
+    scrollToBottom();
+  } catch (e) { /* 历史不可用时静默，不影响新对话 */ }
+}
+
+// 统一发送：自动附带 session_id，让后端按会话分桌
+function wsSend(payload) {
+  ws.send(JSON.stringify({ ...payload, session_id: JARVIS_SESSION_ID }));
+}
+
 function connect() {
-  ws = new WebSocket(`ws://${location.host}/ws/chat`);
+  const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(`${wsProto}//${location.host}/ws/chat`);
   ws.onopen  = () => { dot.className = "status-dot online"; addSystemMessage("已连接到贾维斯"); };
   ws.onclose = () => { dot.className = "status-dot"; addSystemMessage("连接断开，3秒后重连…"); setTimeout(connect, 3000); };
   ws.onerror = () => addSystemMessage("连接出错");
@@ -343,20 +1216,35 @@ function connect() {
       sendBtn.disabled = true;
 
     } else if (msg.type === "chunk") {
+      // 正文流：累积原始文本并渲染 Markdown（表格/标题/列表/代码块）
       if (currentBubble) {
-        if (msg.text.includes("⚙️")) {
-          const span = document.createElement("span");
-          span.className = "tool-indicator";
-          span.textContent = msg.text.replace(/\n/g, "");
-          currentBubble.appendChild(span);
-        } else {
-          currentBubble.appendChild(document.createTextNode(msg.text));
+        currentBubble._raw = (currentBubble._raw || "") + msg.text;
+        renderBubbleMarkdown(currentBubble);
+        scrollToBottom();
+      }
+
+    } else if (msg.type === "tool_status") {
+      // 工具进度：固定在气泡首行，原地刷新文字 + 呼吸提示；
+      // 一轮内多次调用只刷新同一行，不夹进正文、不随文本流漂移
+      if (currentBubble) {
+        let line = currentBubble._toolLine;
+        if (!line) {
+          line = document.createElement("div");
+          currentBubble._toolLine = line;
+          currentBubble.insertBefore(line, currentBubble.firstChild);
         }
+        line.className = "tool-status-line active";
+        line.innerHTML = ICON.gear + "<span>" + escHtml("调用工具：" + (msg.name || "")) + "</span>";
         scrollToBottom();
       }
 
     } else if (msg.type === "end") {
       dot.className = "status-dot online";
+      // 收尾：停止呼吸，首行保留最后一次调用的工具作为静态记录
+      if (currentBubble && currentBubble._toolLine) {
+        currentBubble._toolLine.classList.remove("active");
+        currentBubble._toolLine.classList.add("done");
+      }
       currentBubble = null;
       sendBtn.disabled = false;
 
@@ -372,8 +1260,659 @@ function connect() {
 
     } else if (msg.type === "code_review") {
       addCodeReviewCard(msg.name, msg.code, msg.message, msg.validation);
+
+    } else if (msg.type === "file_download") {
+      addFileDownloadCard(msg.filename, msg.url, msg.size);
+
+    } else if (msg.type === "credential_reveal") {
+      addCredentialRevealCard(msg.alias, msg.type_label, msg.values);
     }
   };
+}
+
+// ── 证件字段中文名 ───────────────────────────────────────────────────────────
+const FIELD_LABELS = {
+  card_number: "卡号", cvv: "CVV", cvc: "CVC", expiry: "有效期", bank: "发卡行",
+  id_number: "身份证号", name: "姓名", birth_date: "出生日期", address: "住址",
+  issue_date: "签发日期", passport_number: "护照号", license_number: "证号",
+  account_number: "账号", pin: "密码", note: "备注",
+  authority: "签发机关", vehicle_class: "准驾车型",
+};
+function fieldLabel(k) { return FIELD_LABELS[k] || k; }
+
+// ── 聊天里安全显示真实值（仅本机推送，不经云端）───────────────────────────────
+const COPY_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+
+function addCredentialRevealCard(alias, typeLabel, values) {
+  const wrap = document.createElement("div");
+  wrap.className = "message assistant";
+  let rows = "";
+  for (const [k, v] of Object.entries(values)) {
+    if (k === "_raw_lines") continue;
+    rows += `<div class="reveal-row">
+      <span class="reveal-k">${escHtml(fieldLabel(k))}</span>
+      <span class="reveal-v">${escHtml(String(v))}</span>
+      <span class="reveal-copy" title="复制" onclick="copyText(this)">${COPY_SVG}</span>
+    </div>`;
+  }
+  wrap.innerHTML = `
+    <div class="avatar">J</div>
+    <div style="flex:1">
+      <div style="font-size:12.5px;color:var(--text-dim);margin-bottom:2px">🔒 ${escHtml(alias)}${typeLabel ? "（"+escHtml(typeLabel)+"）" : ""} · 仅本机显示</div>
+      ${rows}
+    </div>`;
+  messagesEl.appendChild(wrap);
+  scrollToBottom();
+}
+
+function copyText(el) {
+  // 从同一行的 .reveal-v 读取真实值，避免把值塞进 HTML 属性（正是之前的 bug）
+  const row = el.closest(".reveal-row");
+  const text = row ? row.querySelector(".reveal-v").textContent : "";
+  navigator.clipboard.writeText(text).then(() => {
+    el.style.color = "var(--green)";
+    setTimeout(() => { el.style.color = ""; }, 1200);
+  });
+}
+
+// ── 统一右侧抽屉 ─────────────────────────────────────────────────────────────
+const _panelLoaders = {
+  intel:     () => loadIntel(),
+  calendar:  () => loadCalendar(),
+  schedules: () => loadSchedules(),
+  vault:     () => { loadCredentials(); renderManualFields(); loadDocuments(); },
+  settings:  () => { loadProfile(); loadHubspot(); },
+};
+
+// ── 用户档案 / core memory ───────────────────────────────────────────────────
+async function loadProfile() {
+  const box = document.getElementById("profile-list");
+  try {
+    const facts = await (await fetch("/api/profile")).json();
+    if (!Array.isArray(facts) || !facts.length) {
+      box.innerHTML = `<div style="font-size:12px;color:var(--text-faint);padding:6px 0">还没有长期事实。</div>`;
+      return;
+    }
+    box.innerHTML = facts.map(f => `
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;margin-bottom:6px;background:var(--bg-2);border:1px solid var(--border);border-radius:9px">
+        <span style="flex:1;font-size:13px">${esc(f.text)}</span>
+        <span title="删除" onclick="deleteProfileFact(${f.id})" style="cursor:pointer;color:var(--text-faint);font-size:16px;line-height:1">×</span>
+      </div>`).join("");
+  } catch (e) { box.innerHTML = `<div style="font-size:12px;color:var(--red)">加载失败</div>`; }
+}
+async function addProfileFact() {
+  const inp = document.getElementById("profile-input");
+  const text = inp.value.trim();
+  if (!text) return;
+  try {
+    const d = await (await fetch("/api/profile", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ text })
+    })).json();
+    if (d.ok) { inp.value = ""; loadProfile(); } else { toast(d.message || "添加失败"); }
+  } catch (e) { toast("网络错误"); }
+}
+async function deleteProfileFact(id) {
+  try { await fetch(`/api/profile/${id}`, { method: "DELETE" }); loadProfile(); }
+  catch (e) { toast("删除失败"); }
+}
+
+function openDrawer(panel) {
+  document.getElementById("drawer").classList.add("open");
+  document.getElementById("drawer-scrim").classList.add("active");
+  document.getElementById("drawer").setAttribute("aria-hidden", "false");
+  // 不指定面板时回到上次停留的面板，默认情报台
+  switchPanel(panel || localStorage.getItem("jarvis_last_panel") || "intel");
+}
+function closeDrawer() {
+  document.getElementById("drawer").classList.remove("open");
+  document.getElementById("drawer-scrim").classList.remove("active");
+  document.getElementById("drawer").setAttribute("aria-hidden", "true");
+}
+function switchPanel(panel) {
+  document.querySelectorAll(".dtab").forEach(t =>
+    t.classList.toggle("active", t.dataset.panel === panel));
+  document.querySelectorAll(".dpanel").forEach(p =>
+    p.classList.toggle("active", p.id === "panel-" + panel));
+  localStorage.setItem("jarvis_last_panel", panel);
+  (_panelLoaders[panel] || (() => {}))();
+}
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+
+// 轻提示 + 转义（情报台/定时任务面板共用）
+function toast(m) {
+  const t = document.getElementById("toast");
+  t.textContent = m; t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 2200);
+}
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function switchTab(which) {
+  document.getElementById("tab-ocr").classList.toggle("active", which === "ocr");
+  document.getElementById("tab-manual").classList.toggle("active", which === "manual");
+  document.getElementById("pane-ocr").style.display = which === "ocr" ? "" : "none";
+  document.getElementById("pane-manual").style.display = which === "manual" ? "" : "none";
+}
+
+const EXPIRED_DAY = 86400000;
+async function loadCredentials() {
+  const box = document.getElementById("cred-list");
+  box.innerHTML = `<div class="cred-empty">加载中…</div>`;
+  try {
+    const resp = await fetch("/api/credentials");
+    const items = await resp.json();
+    if (!items.length) { box.innerHTML = `<div class="cred-empty">还没有保存任何证件</div>`; return; }
+    box.innerHTML = items.map(renderCredCard).join("");
+  } catch (e) {
+    box.innerHTML = `<div class="cred-empty">加载失败：${escHtml(e.message)}</div>`;
+  }
+}
+
+function renderCredCard(c) {
+  let expHtml = "";
+  if (c.expires_at) {
+    const t = Date.parse(c.expires_at);
+    if (isNaN(t)) {
+      expHtml = `<span class="cred-exp">${escHtml(c.expires_at)}</span>`;  // 如"长期"
+    } else {
+      const days = Math.round((t - Date.now()) / EXPIRED_DAY);
+      const cls = days < 0 ? "expired" : (days < 60 ? "warn" : "");
+      const txt = days < 0 ? `已过期 ${-days} 天` : `${c.expires_at} 到期`;
+      expHtml = `<span class="cred-exp ${cls}">${txt}</span>`;
+    }
+  }
+  const chips = Object.entries(c.preview || {})
+    .filter(([k]) => k !== "_raw_lines")
+    .map(([k, v]) => `<span class="cred-chip">${escHtml(fieldLabel(k))}: ${escHtml(String(v))}</span>`).join("");
+  const imgBtn = (c.image_count > 0) ? `
+      <button class="cred-btn" onclick="viewImages(this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+        照片 ${c.image_count}
+      </button>` : "";
+  return `<div class="cred-card" data-alias="${escAttr(c.alias)}">
+    <div class="cred-top">
+      <span class="cred-alias">${escHtml(c.alias)}</span>
+      <span class="cred-type">${escHtml(c.type_label || c.type)}</span>
+      ${expHtml}
+    </div>
+    <div class="cred-fields">${chips || '<span class="cred-chip">无字段</span>'}</div>
+    <div class="cred-actions">
+      <button class="cred-btn reveal" onclick="revealFromPanel(this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+        显示完整
+      </button>
+      ${imgBtn}
+      <button class="cred-btn" onclick="editCredential(this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+        更新
+      </button>
+      <button class="cred-btn danger" onclick="deleteCredential(this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+        删除
+      </button>
+    </div>
+    <div class="reveal-target"></div>
+    <div class="img-target"></div>
+  </div>`;
+}
+
+async function revealFromPanel(btn) {
+  const card = btn.closest(".cred-card");
+  const alias = card.dataset.alias;
+  const target = card.querySelector(".reveal-target");
+  if (target.dataset.shown === "1") { target.innerHTML = ""; target.dataset.shown = "0"; return; }
+  try {
+    const resp = await fetch(`/api/credentials/${encodeURIComponent(alias)}/reveal`, {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({})
+    });
+    const data = await resp.json();
+    const vals = data.values || {};
+    let rows = "";
+    for (const [k, v] of Object.entries(vals)) {
+      if (k === "_raw_lines") continue;
+      rows += `<div class="reveal-row">
+        <span class="reveal-k">${escHtml(fieldLabel(k))}</span>
+        <span class="reveal-v">${escHtml(String(v))}</span>
+        <span class="reveal-copy" title="复制" onclick="copyText(this)">${COPY_SVG}</span>
+      </div>`;
+    }
+    target.innerHTML = rows || `<div class="cred-empty">无可显示字段</div>`;
+    target.dataset.shown = "1";
+  } catch (e) {
+    target.innerHTML = `<div class="cred-empty">读取失败：${escHtml(e.message)}</div>`;
+  }
+}
+
+async function viewImages(btn) {
+  const card = btn.closest(".cred-card");
+  const alias = card.dataset.alias;
+  const target = card.querySelector(".img-target");
+  if (target.dataset.shown === "1") { target.innerHTML = ""; target.dataset.shown = "0"; return; }
+  target.innerHTML = `<div class="cred-empty">加载中…</div>`;
+  try {
+    const resp = await fetch(`/api/credentials/${encodeURIComponent(alias)}/images`);
+    const imgs = await resp.json();
+    if (!imgs.length) { target.innerHTML = `<div class="cred-empty">没有照片</div>`; target.dataset.shown = "1"; return; }
+    target.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:9px">` + imgs.map(im => {
+      const url = `/api/credentials/${encodeURIComponent(alias)}/image/${im.id}`;
+      return `<div style="position:relative">
+        <img src="${url}" style="height:88px;border-radius:8px;border:1px solid var(--border);cursor:zoom-in" onclick="window.open('${url}','_blank')">
+        <span onclick="deleteCredImage(this)" data-id="${im.id}" title="删除这张照片" style="position:absolute;top:-6px;right:-6px;background:var(--red);color:#fff;width:18px;height:18px;border-radius:50%;font-size:13px;line-height:18px;text-align:center;cursor:pointer">×</span>
+      </div>`;
+    }).join("") + `</div>`;
+    target.dataset.shown = "1";
+  } catch (e) { target.innerHTML = `<div class="cred-empty">加载失败：${escHtml(e.message)}</div>`; }
+}
+
+async function deleteCredImage(el) {
+  const alias = el.closest(".cred-card").dataset.alias;
+  const id = el.dataset.id;
+  if (!confirm("删除这张照片？")) return;
+  await fetch(`/api/credentials/${encodeURIComponent(alias)}/image/${id}`, { method: "DELETE" });
+  loadCredentials();
+}
+
+async function deleteCredential(btn) {
+  const alias = btn.closest(".cred-card").dataset.alias;
+  if (!confirm(`确定删除「${alias}」？此操作不可恢复（含已存照片）。`)) return;
+  await fetch(`/api/credentials/${encodeURIComponent(alias)}`, { method: "DELETE" });
+  loadCredentials();
+}
+
+let _scanType = "other";
+let _scanToken = null;
+
+async function scanCredential() {
+  const fileInput = document.getElementById("cred-file");
+  const files = Array.from(fileInput.files || []);
+  const status = document.getElementById("ocr-status");
+  const confirm = document.getElementById("ocr-confirm");
+  if (!files.length) return;
+  confirm.style.display = "none";
+  status.className = "vault-status";
+  status.textContent = `本地识别中…（${files.length} 张，照片不会上传）`;
+  const fd = new FormData();
+  files.forEach(f => fd.append("files", f));
+  fd.append("cred_type", document.getElementById("ocr-type").value);
+  try {
+    const resp = await fetch("/api/credentials/scan", { method: "POST", body: fd });
+    const data = await resp.json();
+    fileInput.value = "";
+    if (!data.ok) { status.className = "vault-status err"; status.textContent = data.message || "识别失败"; return; }
+    _scanType = data.cred_type || "other";
+    _scanToken = data.scan_token || null;
+    const fields = data.fields || {};
+    const detected = Object.keys(fields).filter(k => k !== "expiry").map(fieldLabel);
+    const cnt = data.image_count || files.length;
+    status.className = "vault-status ok";
+    status.textContent = `已识别 ${cnt} 张（${data.type_label}）：${detected.length ? detected.join("、") : "未提取到字段，可手动填写"}。请核对后保存。`;
+
+    // 复核表单：列出该类型的【全部】字段（OCR 填好的预填，没认到的留空也显示），逐项核对
+    const tmpl = (MANUAL_FIELDS[_scanType] || MANUAL_FIELDS.other).map(([k]) => k).filter(k => k !== "expiry");
+    const extra = Object.keys(fields).filter(k => k !== "expiry" && !tmpl.includes(k));  // OCR 多识别的字段也带上
+    let keys = tmpl.concat(extra);
+    if (_scanType === "bank_card" && !keys.includes("cvv")) keys.push("cvv");
+
+    document.getElementById("oc-fields").innerHTML = keys.map(k => {
+      const val = (k === "cvv") ? "" : (fields[k] || "");
+      const ph = (k === "cvv") ? "看卡背手动填 3 位" : "OCR 未识别，可手填";
+      return `<div class="vault-field"><label>${fieldLabel(k)}</label><input class="vault-input" data-field="${k}" value="${escAttr(String(val))}" placeholder="${ph}"></div>`;
+    }).join("");
+    document.getElementById("oc-expiry").value = data.expiry || fields.expiry || "";
+    const raw = data.raw_lines || [];
+    document.getElementById("oc-raw").textContent = raw.length
+      ? raw.join("\n")
+      : "（OCR 未读到任何文字——多半是照片太小/太糊/反光，建议在光线均匀处重拍更清晰、更正的图）";
+    confirm.style.display = "";
+  } catch (e) {
+    fileInput.value = "";
+    status.className = "vault-status err"; status.textContent = "失败：" + e.message;
+  }
+}
+
+function escAttr(s) { return s.replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;"); }
+
+async function confirmSaveCredential() {
+  const alias = document.getElementById("oc-alias").value.trim();
+  const status = document.getElementById("ocr-status");
+  if (!alias) { status.className = "vault-status err"; status.textContent = "请填代号再保存"; return; }
+  const fields = {};
+  document.querySelectorAll("#oc-fields .vault-input").forEach(inp => {
+    if (inp.value.trim()) fields[inp.dataset.field] = inp.value.trim();
+  });
+  const expiry = document.getElementById("oc-expiry").value.trim();
+  try {
+    const resp = await fetch("/api/credentials/manual", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        alias, cred_type: _scanType, fields, expires_at: expiry || null,
+        scan_token: _scanToken, keep_images: document.getElementById("oc-keep").checked
+      })
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      status.className = "vault-status ok"; status.textContent = data.message;
+      document.getElementById("ocr-confirm").style.display = "none";
+      document.getElementById("oc-alias").value = "";
+      _scanToken = null;
+      loadCredentials();
+    } else { status.className = "vault-status err"; status.textContent = data.message || "保存失败"; }
+  } catch (e) { status.className = "vault-status err"; status.textContent = "失败：" + e.message; }
+}
+
+const MANUAL_FIELDS = {
+  bank_card:      [["card_number","卡号"],["cvv","CVV"],["bank","发卡行"],["name","持卡人"]],
+  id_card:        [["id_number","身份证号"],["name","姓名"],["birth_date","出生日期"],["address","住址"],["issue_date","签发日期"],["authority","签发机关"]],
+  passport:       [["passport_number","护照号"],["name","姓名"],["birth_date","出生日期"],["issue_date","签发日期"]],
+  driver_license: [["license_number","证号"],["name","姓名"],["vehicle_class","准驾车型"]],
+  other:          [["number","号码"],["name","名称"]],
+};
+function renderManualFields() {
+  const type = document.getElementById("m-type").value;
+  const fields = (MANUAL_FIELDS[type] || MANUAL_FIELDS.other).filter(([k]) => k !== "expiry");
+  document.getElementById("m-fields").innerHTML = fields.map(([k, label]) =>
+    `<div class="vault-field"><label>${label}</label><input class="vault-input" data-field="${k}" placeholder="${label}"></div>`
+  ).join("");
+}
+async function manualSave() {
+  const alias = document.getElementById("m-alias").value.trim();
+  const status = document.getElementById("m-status");
+  if (!alias) { status.className = "vault-status err"; status.textContent = "请填代号"; return; }
+  const fields = {};
+  document.querySelectorAll("#m-fields .vault-input").forEach(inp => {
+    if (inp.value.trim()) fields[inp.dataset.field] = inp.value.trim();
+  });
+  const expiry = document.getElementById("m-expiry").value.trim();
+  try {
+    const resp = await fetch("/api/credentials/manual", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ alias, cred_type: document.getElementById("m-type").value, fields, expires_at: expiry || null })
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      status.className = "vault-status ok"; status.textContent = data.message;
+      document.getElementById("m-alias").value = ""; document.getElementById("m-expiry").value = "";
+      renderManualFields(); loadCredentials();
+    } else { status.className = "vault-status err"; status.textContent = data.message || "保存失败"; }
+  } catch (e) { status.className = "vault-status err"; status.textContent = "失败：" + e.message; }
+}
+
+// 编辑证件：把真实值预填进「手动录入」表单，改完保存即按同代号覆盖（不必删了重传）
+async function editCredential(btn) {
+  const alias = btn.closest(".cred-card").dataset.alias;
+  switchTab("manual");
+  let meta = {};
+  try {
+    const list = await (await fetch("/api/credentials")).json();
+    meta = (list || []).find(c => c.alias === alias) || {};
+  } catch (e) {}
+  document.getElementById("m-type").value = meta.type || "other";
+  renderManualFields();
+  let vals = {};
+  try {
+    vals = ((await (await fetch(`/api/credentials/${encodeURIComponent(alias)}/reveal`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
+    })).json()).values) || {};
+  } catch (e) {}
+  document.getElementById("m-alias").value = alias;
+  document.getElementById("m-expiry").value = meta.expires_at || "";
+  Object.entries(vals).forEach(([k, v]) => {
+    if (k === "_raw_lines") return;
+    let inp = document.querySelector(`#m-fields .vault-input[data-field="${k}"]`);
+    if (!inp) {
+      const div = document.createElement("div");
+      div.className = "vault-field";
+      div.innerHTML = `<label>${fieldLabel(k)}</label><input class="vault-input" data-field="${escAttr(k)}">`;
+      document.getElementById("m-fields").appendChild(div);
+      inp = div.querySelector("input");
+    }
+    inp.value = v;
+  });
+  const status = document.getElementById("m-status");
+  status.className = "vault-status"; status.textContent = `正在编辑「${alias}」，改完点「加密保存」即覆盖。`;
+  document.getElementById("pane-manual").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+// ── 文档保险箱（保单 / 合同 / 协议）────────────────────────────────────────────
+const DOC_TYPE_LABELS = { policy: "保单", contract: "合同", agreement: "协议", other: "其它文档" };
+let _docToken = null;       // 暂存原件 token（新建上传 / 替换原件时）
+
+function switchVaultKind(kind) {
+  const isDoc = kind === "doc";
+  document.getElementById("vault-kind-cred").style.display = isDoc ? "none" : "";
+  document.getElementById("vault-kind-doc").style.display  = isDoc ? "" : "none";
+  document.getElementById("kind-cred").classList.toggle("active", !isDoc);
+  document.getElementById("kind-doc").classList.toggle("active", isDoc);
+  if (isDoc) loadDocuments();
+}
+
+async function loadDocuments() {
+  const box = document.getElementById("doc-list");
+  if (!box) return;
+  box.innerHTML = `<div class="cred-empty">加载中…</div>`;
+  try {
+    const items = await (await fetch("/api/documents")).json();
+    if (!items.length) { box.innerHTML = `<div class="cred-empty">还没有保存任何文档</div>`; return; }
+    box.innerHTML = items.map(renderDocCard).join("");
+  } catch (e) {
+    box.innerHTML = `<div class="cred-empty">加载失败：${escHtml(e.message)}</div>`;
+  }
+}
+
+function renderDocCard(d) {
+  let expHtml = "";
+  if (d.expires_at) {
+    const t = Date.parse(d.expires_at);
+    if (isNaN(t)) { expHtml = `<span class="cred-exp">${escHtml(d.expires_at)}</span>`; }
+    else {
+      const days = Math.round((t - Date.now()) / EXPIRED_DAY);
+      const cls = days < 0 ? "expired" : (days < 60 ? "warn" : "");
+      const txt = days < 0 ? `已过期 ${-days} 天` : `${d.expires_at} 到期`;
+      expHtml = `<span class="cred-exp ${cls}">${txt}</span>`;
+    }
+  }
+  const chips = Object.entries(d.fields || {})
+    .map(([k, v]) => `<span class="cred-chip">${escHtml(k)}: ${escHtml(String(v))}</span>`).join("");
+  const ver = d.current_version ? `<button class="cred-btn" onclick="viewDocVersions(this)">版本 ${d.file_count}</button>` : "";
+  const viewBtn = d.current_version ? `<button class="cred-btn reveal" onclick="openDocCurrent(this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>查看原件</button>` : "";
+  return `<div class="cred-card doc-card" data-alias="${escAttr(d.alias)}">
+    <div class="cred-top">
+      <span class="cred-alias">${escHtml(d.alias)}</span>
+      <span class="cred-type">${escHtml(d.type_label || d.doc_type)}</span>
+      ${expHtml}
+    </div>
+    <div class="cred-fields">${chips || '<span class="cred-chip">无摘要字段</span>'}</div>
+    <div class="cred-actions">
+      ${viewBtn}
+      ${ver}
+      <button class="cred-btn" onclick="editDocument(this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>更新
+      </button>
+      <button class="cred-btn danger" onclick="deleteDocument(this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>删除
+      </button>
+    </div>
+    <div class="ver-target"></div>
+  </div>`;
+}
+
+function openDocCurrent(btn) {
+  const alias = btn.closest(".doc-card").dataset.alias;
+  fetch(`/api/documents/${encodeURIComponent(alias)}/files`).then(r => r.json()).then(files => {
+    const cur = (files || []).find(f => f.is_current) || (files || [])[0];
+    if (cur) window.open(`/api/documents/${encodeURIComponent(alias)}/file/${cur.id}`, "_blank");
+  });
+}
+
+async function viewDocVersions(btn) {
+  const card = btn.closest(".doc-card");
+  const alias = card.dataset.alias;
+  const target = card.querySelector(".ver-target");
+  if (target.dataset.shown === "1") { target.innerHTML = ""; target.dataset.shown = "0"; return; }
+  target.innerHTML = `<div class="cred-empty">加载中…</div>`;
+  try {
+    const files = await (await fetch(`/api/documents/${encodeURIComponent(alias)}/files`)).json();
+    if (!files.length) { target.innerHTML = `<div class="cred-empty">没有原件</div>`; target.dataset.shown = "1"; return; }
+    target.innerHTML = files.map(f => {
+      const url = `/api/documents/${encodeURIComponent(alias)}/file/${f.id}`;
+      const kb = f.size ? `${Math.round(f.size/1024)} KB` : "";
+      const cur = f.is_current ? `<span class="ver-cur">当前</span>` : `<button class="cred-btn" onclick="setDocCurrent('${escAttr(alias)}',${f.id})">设为当前</button>`;
+      return `<div class="ver-row">
+        <span>v${f.version}</span>
+        <a href="${url}" target="_blank" style="color:var(--accent-2);text-decoration:none">${escHtml(f.orig_name || "原件")}</a>
+        <span style="color:var(--text-faint)">${kb}</span>
+        ${cur}
+        <button class="cred-btn danger" style="margin-left:auto" onclick="deleteDocFile('${escAttr(alias)}',${f.id})">删除</button>
+      </div>`;
+    }).join("");
+    target.dataset.shown = "1";
+  } catch (e) { target.innerHTML = `<div class="cred-empty">加载失败：${escHtml(e.message)}</div>`; }
+}
+
+async function setDocCurrent(alias, id) {
+  await fetch(`/api/documents/${encodeURIComponent(alias)}/file/${id}/current`, { method: "POST" });
+  loadDocuments();
+}
+async function deleteDocFile(alias, id) {
+  if (!confirm("删除这个版本的原件？")) return;
+  await fetch(`/api/documents/${encodeURIComponent(alias)}/file/${id}`, { method: "DELETE" });
+  loadDocuments();
+}
+async function deleteDocument(btn) {
+  const alias = btn.closest(".doc-card").dataset.alias;
+  if (!confirm(`确定删除文档「${alias}」？含所有版本原件，不可恢复。`)) return;
+  await fetch(`/api/documents/${encodeURIComponent(alias)}`, { method: "DELETE" });
+  loadDocuments();
+}
+
+// 摘要字段编辑行
+function addDocFieldRow(k, v) {
+  const wrap = document.getElementById("df-fields");
+  const row = document.createElement("div");
+  row.className = "df-row";
+  row.innerHTML = `<input class="vault-input df-key" placeholder="字段名" value="${escAttr(k || "")}">
+    <input class="vault-input df-val" placeholder="值" value="${escAttr(v || "")}">
+    <button class="df-del" title="删除此字段" onclick="this.closest('.df-row').remove()">×</button>`;
+  wrap.appendChild(row);
+}
+
+// 打开表单：alias=null 新建空白；否则编辑该文档
+async function openDocForm(alias, prefill) {
+  _docToken = null;
+  const form = document.getElementById("doc-form");
+  const fieldsBox = document.getElementById("df-fields");
+  fieldsBox.innerHTML = "";
+  document.getElementById("df-replace-status").textContent = "";
+  document.getElementById("df-replace-file").value = "";
+  const aliasInput = document.getElementById("df-alias");
+  if (alias) {
+    document.getElementById("doc-form-title").textContent = `更新「${alias}」`;
+    aliasInput.value = alias; aliasInput.readOnly = true;
+    let data = prefill;
+    if (!data) {
+      try { data = await (await fetch(`/api/documents/${encodeURIComponent(alias)}/fields`)).json(); }
+      catch (e) { data = { fields: {} }; }
+    }
+    document.getElementById("df-type").value = data.doc_type || "other";
+    document.getElementById("df-expiry").value = data.expires_at || "";
+    const fields = data.fields || {};
+    if (Object.keys(fields).length) Object.entries(fields).forEach(([k, v]) => addDocFieldRow(k, v));
+    else addDocFieldRow("", "");
+    document.getElementById("df-replace-label").textContent = "替换原件（选填，将作为新版本）";
+  } else {
+    document.getElementById("doc-form-title").textContent = "新建文档";
+    aliasInput.value = ""; aliasInput.readOnly = false;
+    document.getElementById("df-type").value = "other";
+    document.getElementById("df-expiry").value = "";
+    addDocFieldRow("", "");
+    document.getElementById("df-replace-label").textContent = "上传原件（选填，将加密保存）";
+  }
+  form.style.display = "";
+  form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function editDocument(btn) {
+  switchVaultKind("doc");
+  openDocForm(btn.closest(".doc-card").dataset.alias);
+}
+
+// 新建上传：先暂存+AI 提取，再用提取结果预填表单
+async function scanDocument() {
+  const fileInput = document.getElementById("doc-file");
+  const files = Array.from(fileInput.files || []);
+  const status = document.getElementById("doc-status");
+  if (!files.length) return;
+  status.className = "vault-status"; status.textContent = "上传并自动提取摘要中…（原件本机加密，仅文字经 AI 一次）";
+  const fd = new FormData();
+  files.forEach(f => fd.append("files", f));
+  fd.append("doc_type", document.getElementById("doc-type").value);
+  try {
+    const data = await (await fetch("/api/documents/scan", { method: "POST", body: fd })).json();
+    fileInput.value = "";
+    if (!data.ok) { status.className = "vault-status err"; status.textContent = data.message || "提取失败"; return; }
+    _docToken = data.scan_token || null;
+    const cnt = Object.keys(data.fields || {}).length;
+    status.className = "vault-status ok";
+    status.textContent = `已提取 ${cnt} 项摘要（${data.type_label}）。请核对后保存。`;
+    openDocForm(null, { doc_type: data.doc_type, expires_at: data.expires_at, fields: data.fields || {} });
+    document.getElementById("df-replace-status").textContent = "原件已暂存，保存时归档为第 1 版。";
+  } catch (e) {
+    fileInput.value = ""; status.className = "vault-status err"; status.textContent = "失败：" + e.message;
+  }
+}
+
+// 编辑/新建表单里替换或补传原件：暂存（不强制覆盖已填字段）
+async function stageDocReplacement() {
+  const fileInput = document.getElementById("df-replace-file");
+  const files = Array.from(fileInput.files || []);
+  const st = document.getElementById("df-replace-status");
+  if (!files.length) return;
+  st.className = "vault-status"; st.textContent = "处理原件中…";
+  const fd = new FormData();
+  files.forEach(f => fd.append("files", f));
+  fd.append("doc_type", document.getElementById("df-type").value);
+  try {
+    const data = await (await fetch("/api/documents/scan", { method: "POST", body: fd })).json();
+    if (!data.ok) { st.className = "vault-status err"; st.textContent = data.message || "处理失败"; return; }
+    _docToken = data.scan_token || null;
+    st.className = "vault-status ok";
+    st.textContent = "原件已就绪，保存时作为新版本归档。";
+    // 若当前字段为空，顺带用提取结果补上（不覆盖已填）
+    const hasVals = Array.from(document.querySelectorAll("#df-fields .df-key")).some(i => i.value.trim());
+    if (!hasVals && data.fields && Object.keys(data.fields).length) {
+      document.getElementById("df-fields").innerHTML = "";
+      Object.entries(data.fields).forEach(([k, v]) => addDocFieldRow(k, v));
+      if (data.expires_at && !document.getElementById("df-expiry").value) document.getElementById("df-expiry").value = data.expires_at;
+    }
+  } catch (e) { st.className = "vault-status err"; st.textContent = "失败：" + e.message; }
+}
+
+async function saveDocForm() {
+  const alias = document.getElementById("df-alias").value.trim();
+  const status = document.getElementById("doc-status");
+  if (!alias) { status.className = "vault-status err"; status.textContent = "请填代号再保存"; return; }
+  const fields = {};
+  document.querySelectorAll("#df-fields .df-row").forEach(row => {
+    const k = row.querySelector(".df-key").value.trim();
+    const v = row.querySelector(".df-val").value.trim();
+    if (k) fields[k] = v;
+  });
+  const expiry = document.getElementById("df-expiry").value.trim();
+  try {
+    const data = await (await fetch("/api/documents/manual", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        alias, doc_type: document.getElementById("df-type").value, fields,
+        expires_at: expiry || null, scan_token: _docToken, keep_file: true,
+      })
+    })).json();
+    if (data.ok) {
+      status.className = "vault-status ok"; status.textContent = data.message;
+      document.getElementById("doc-form").style.display = "none";
+      _docToken = null;
+      loadDocuments();
+    } else { status.className = "vault-status err"; status.textContent = data.message || "保存失败"; }
+  } catch (e) { status.className = "vault-status err"; status.textContent = "失败：" + e.message; }
 }
 
 // ── 文件上传 ───────────────────────────────────────────────────────────────
@@ -385,15 +1924,12 @@ function triggerUpload() {
 function handleFileSelect(file) {
   if (!file) return;
   uploadFile(file);
-  // 重置 input，允许重复上传同一文件
   document.getElementById("file-input").value = "";
 }
 
 async function uploadFile(file) {
-  // 显示文件气泡（上传中状态）
   addFileBubble(file.name, file.size, "上传中…");
 
-  // 进度条
   uploadBar.classList.add("active");
   uploadProg.style.width = "30%";
 
@@ -409,10 +1945,9 @@ async function uploadFile(file) {
     uploadProg.style.width = "100%";
     setTimeout(() => { uploadBar.classList.remove("active"); uploadProg.style.width = "0%"; }, 400);
 
-    // 自动发送消息，带文件路径
     const prompt = `请读取并分析这个文件，告诉我里面的主要内容：${data.path}`;
     addUserMessage(`📄 ${file.name}`);
-    ws.send(JSON.stringify({ message: prompt }));
+    wsSend({ message: prompt });
 
   } catch (err) {
     uploadBar.classList.remove("active");
@@ -503,6 +2038,112 @@ function escHtml(s) {
   return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 
+// ── 轻量 Markdown 渲染（无外部依赖，离线可用；文本一律先转义防注入）──
+function mdInline(s) {
+  s = escHtml(s);
+  s = s.replace(/`([^`]+)`/g, (m, c) => "<code>" + c + "</code>");
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,
+    (m, t, u) => '<a href="' + u.replace(/"/g, "%22") + '" target="_blank" rel="noopener noreferrer">' + t + "</a>");
+  return s;
+}
+
+function mdSplitRow(line) {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|"))   s = s.slice(0, -1);
+  return s.split("|").map(c => c.trim());
+}
+
+function renderMarkdown(src) {
+  const lines = (src || "").replace(/\r\n?/g, "\n").split("\n");
+  const isSep = (l) => l != null && l.includes("-") && /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(l);
+  let out = "", i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // 代码块 ```
+    if (/^\s*```/.test(line)) {
+      i++;
+      const code = [];
+      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { code.push(lines[i]); i++; }
+      i++;
+      out += "<pre><code>" + escHtml(code.join("\n")) + "</code></pre>";
+      continue;
+    }
+    // 表格（含 | 的行 + 下一行是分隔行）
+    if (/\|/.test(line) && isSep(lines[i + 1])) {
+      const head = mdSplitRow(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && /\|/.test(lines[i]) && lines[i].trim()) { rows.push(mdSplitRow(lines[i])); i++; }
+      let t = "<table><thead><tr>";
+      head.forEach(h => t += "<th>" + mdInline(h) + "</th>");
+      t += "</tr></thead><tbody>";
+      rows.forEach(r => {
+        t += "<tr>";
+        for (let k = 0; k < head.length; k++) t += "<td>" + mdInline(r[k] || "") + "</td>";
+        t += "</tr>";
+      });
+      out += t + "</tbody></table>";
+      continue;
+    }
+    // 标题
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      const lvl = Math.min(h[1].length, 4);
+      out += "<h" + lvl + ">" + mdInline(h[2].replace(/\s+#+\s*$/, "")) + "</h" + lvl + ">";
+      i++; continue;
+    }
+    // 分隔线
+    if (/^\s*([-*_])\1{2,}\s*$/.test(line)) { out += "<hr>"; i++; continue; }
+    // 引用
+    if (/^\s*>\s?/.test(line)) {
+      const buf = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) { buf.push(lines[i].replace(/^\s*>\s?/, "")); i++; }
+      out += "<blockquote>" + renderMarkdown(buf.join("\n")) + "</blockquote>";
+      continue;
+    }
+    // 列表
+    if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
+      const ordered = /^\s*\d+\.\s+/.test(line);
+      const tag = ordered ? "ol" : "ul";
+      let lst = "<" + tag + ">";
+      while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
+        lst += "<li>" + mdInline(lines[i].replace(/^\s*([-*+]|\d+\.)\s+/, "")) + "</li>";
+        i++;
+      }
+      out += lst + "</" + tag + ">";
+      continue;
+    }
+    // 空行
+    if (!line.trim()) { i++; continue; }
+    // 段落（聚合到下一个空行 / 块级起始）
+    const para = [];
+    while (i < lines.length && lines[i].trim() &&
+           !/^\s*(#{1,6}\s|>|```|([-*+]|\d+\.)\s)/.test(lines[i]) &&
+           !/^\s*([-*_])\1{2,}\s*$/.test(lines[i]) &&
+           !(/\|/.test(lines[i]) && isSep(lines[i + 1]))) {
+      para.push(lines[i]); i++;
+    }
+    out += "<p>" + para.map(mdInline).join("<br>") + "</p>";
+  }
+  return out;
+}
+
+// 把累积的原始文本渲染进气泡的 .md-body（流式期间每个 chunk 刷新一次）
+function renderBubbleMarkdown(bubble) {
+  let body = bubble._mdBody;
+  if (!body) {
+    body = document.createElement("div");
+    body.className = "md-body";
+    bubble._mdBody = body;
+    bubble.appendChild(body);
+  }
+  body.innerHTML = renderMarkdown(bubble._raw || "");
+}
+
 function scrollToBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
@@ -513,13 +2154,18 @@ function sendMessage() {
   const text = inputEl.value.trim();
   if (!text || sendBtn.disabled) return;
   addUserMessage(text);
-  ws.send(JSON.stringify({ message: text }));
+  wsSend({ message: text });
   inputEl.value = "";
-  inputEl.style.height = "44px";
+  inputEl.style.height = "38px";
 }
 
-function resetSession() { ws.send(JSON.stringify({ message: "/reset" })); }
-function showMemory()   { ws.send(JSON.stringify({ message: "/memory" })); }
+function resetSession() {
+  if (!confirm("重置会清空当前对话历史（含已持久化记录），无法恢复。确定？")) return;
+  wsSend({ message: "/reset" });
+  messagesEl.innerHTML = "";
+  addSystemMessage("会话已重置");
+  closeDrawer();
+}
 
 // ── 代码审查卡片 ───────────────────────────────────────────────────────────
 
@@ -528,7 +2174,6 @@ function addCodeReviewCard(name, code, message, validation) {
   const hasErrors   = v.errors   && v.errors.length > 0;
   const hasWarnings = v.warnings && v.warnings.length > 0;
 
-  // 验证结果横幅
   let validationHtml = "";
   if (hasErrors) {
     const items = v.errors.map(e => `<li>${escHtml(e)}</li>`).join("");
@@ -549,12 +2194,12 @@ function addCodeReviewCard(name, code, message, validation) {
   card.dataset.toolName = name;
   card.innerHTML = `
     <div class="code-review-header">
-      <span class="code-review-title">🔧 skills/${name}/tool.py</span>
+      <span class="code-review-title">${ICON.wrench} skills/${name}/tool.py</span>
       <div class="code-review-actions">
         <button class="btn-activate" id="activate-${name}"
           onclick="activateTool('${name}')"
           ${hasErrors ? "disabled title='有阻断级错误，无法激活'" : ""}>
-          ${hasErrors ? "❌ 无法激活" : "激活工具"}
+          ${hasErrors ? "无法激活" : ICON.bolt + "激活工具"}
         </button>
         <button class="btn-dismiss" onclick="this.closest('.code-review-card').remove()">忽略</button>
       </div>
@@ -571,6 +2216,26 @@ function addCodeReviewCard(name, code, message, validation) {
   scrollToBottom();
 }
 
+function addFileDownloadCard(filename, url, size) {
+  const wrap = document.createElement("div");
+  wrap.className = "message assistant";
+  wrap.innerHTML = `
+    <div class="avatar">J</div>
+    <a href="${url}" download="${escHtml(filename)}" style="text-decoration:none">
+      <div class="file-bubble" style="cursor:pointer"
+           onmouseover="this.style.background='rgba(99,102,241,0.16)'" onmouseout="this.style.background=''">
+        <div class="file-icon">${fileIcon(filename)}</div>
+        <div class="file-info">
+          <div class="file-name">${escHtml(filename)}</div>
+          <div class="file-meta">${formatSize(size)} · 点击下载</div>
+        </div>
+        <span style="margin-left:auto;color:var(--accent-2);display:flex">${ICON.down}</span>
+      </div>
+    </a>`;
+  messagesEl.appendChild(wrap);
+  scrollToBottom();
+}
+
 async function activateTool(name) {
   const btn = document.getElementById(`activate-${name}`);
   if (!btn) return;
@@ -581,8 +2246,9 @@ async function activateTool(name) {
     const resp = await fetch(`/api/tools/${name}/activate`, { method: "POST" });
     const data = await resp.json();
     if (data.ok) {
-      btn.textContent = "✅ 已激活";
-      btn.style.background = "#1a3a1f";
+      btn.innerHTML = ICON.check + "已激活";
+      btn.style.background = "rgba(52,211,153,0.18)";
+      btn.style.color = "var(--green)";
       addSystemMessage(`工具 ${name} 已激活，现在可以直接使用了。`);
     } else {
       btn.disabled = false;
@@ -601,11 +2267,433 @@ inputEl.addEventListener("keydown", (e) => {
 });
 
 inputEl.addEventListener("input", () => {
-  inputEl.style.height = "44px";
+  inputEl.style.height = "38px";
   inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
 });
 
-connect();
+// 先回放持久化历史，再建立实时连接，保证历史在最上方
+(async () => { await loadHistory(); connect(); })();
+
+// ── 情报台面板：通用卡片仪表盘（消费 /api/intel/dashboard，空卡自动隐藏）──────
+async function runCollect(btn){
+  if(!confirm('将运行「采集今日信号」：联网广扫电子元件/整机行业，把今日信号入库（喂情报台与市场情报日报）。约耗 1–3 分钟，继续？')) return;
+  const old=btn.textContent; btn.textContent='采集中…'; btn.disabled=true;
+  try{
+    const d=await (await fetch('/api/workflows/signal_collection/run',{method:'POST'})).json();
+    const ing=(d.data||{}).ingest||{};
+    if(d.ok){
+      const n=ing.inserted||0, m=ing.merged||0;
+      toast(n||m?('已入库：新增 '+n+'，合并 '+m):'本次未采到新信号（行业平淡或检索受限）');
+    } else {
+      const run=d.run||{};
+      toast('采集结束：'+(run.status||'失败')+(run.failed_at?'（'+run.failed_at+'）':''));
+    }
+    loadIntel();
+  }catch(e){ toast('采集失败'); }
+  finally{ btn.textContent=old; btn.disabled=false; }
+}
+
+async function runProspect(btn){
+  if(!confirm('将运行「今日潜客名单」工作流：会在本机打开 Chrome 并连接 HubSpot（未登录则降级为仅按意向排序）。可能耗时较久，继续？')) return;
+  const old=btn.textContent; btn.textContent='运行中…'; btn.disabled=true;
+  try{
+    const d=await (await fetch('/api/workflows/prospect_daily/run',{method:'POST'})).json();
+    const run=d.run||{};
+    toast(d.ok?'今日名单已生成':('运行结束：'+(run.status||'失败')+(run.failed_at?'（'+run.failed_at+'）':'')));
+    loadIntel();
+  }catch(e){ toast('运行失败'); }
+  finally{ btn.textContent=old; btn.disabled=false; }
+}
+
+async function loadIntel(){
+  const root=document.getElementById('intel-root');
+  try{
+    const d=await (await fetch('/api/intel/dashboard')).json();
+    document.getElementById('intel-date').textContent=d.date||'';
+    root.innerHTML=renderDashboard(d);
+  }catch(e){ root.innerHTML='<div class="muted">加载失败：'+esc(e)+'</div>'; }
+}
+
+// ── 日历面板 ─────────────────────────────────────────────────────────────────
+const CAL_TAGS={rest:'休假',reminder:'提醒',expiry:'到期',task:'定时',key_date:'关键日'};
+
+async function loadCalendar(){
+  const root=document.getElementById('cal-agenda');
+  try{
+    const items=await (await fetch('/api/calendar/agenda?days=30')).json();
+    root.innerHTML=renderAgenda(items);
+  }catch(e){ root.innerHTML='<div class="muted">加载失败：'+esc(e)+'</div>'; }
+}
+
+function renderAgenda(items){
+  if(!items||!items.length) return '<div class="muted">未来 30 天暂无日程。</div>';
+  const groups={};
+  items.forEach(e=>{ const d=(e.start||'').slice(0,10); (groups[d]=groups[d]||[]).push(e); });
+  let html='';
+  Object.keys(groups).sort().forEach(d=>{
+    html+='<div class="cal-day"><div class="cal-date">'+esc(d)+'</div>';
+    groups[d].forEach(e=>{
+      const time=e.all_day?'全天':((e.start||'').slice(11,16)||'');
+      const tag=CAL_TAGS[e.kind]?(' <i class="cal-tag t-'+e.kind+'">'+CAL_TAGS[e.kind]+'</i>'):'';
+      const del=e.derived?'':'<button class="cal-del" title="删除" onclick="delCalEvent(\''+e.id+'\')">删</button>';
+      html+='<div class="cal-item"><span class="cal-time">'+esc(time)+'</span>'
+           +'<span class="cal-title">'+esc(e.title||'')+tag+'</span>'+del+'</div>';
+    });
+    html+='</div>';
+  });
+  return html;
+}
+
+async function addCalEvent(btn){
+  const title=document.getElementById('cal-title').value.trim();
+  const start=document.getElementById('cal-start').value;
+  if(!title||!start){ toast('标题和时间必填'); return; }
+  const body={title, start, all_day:document.getElementById('cal-allday').checked};
+  const rrule=document.getElementById('cal-rrule').value;
+  if(rrule) body.rrule=rrule;
+  const notify=document.getElementById('cal-notify').value;
+  if(notify){ try{ body.notify=JSON.parse(notify); }catch(_){ } }
+  btn.disabled=true;
+  try{
+    const r=await (await fetch('/api/calendar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    if(r.ok){ toast('已添加'); document.getElementById('cal-title').value=''; loadCalendar(); }
+    else toast(r.message||'添加失败');
+  }catch(e){ toast('添加失败：'+esc(e)); }
+  finally{ btn.disabled=false; }
+}
+
+async function delCalEvent(id){
+  if(!confirm('删除这个事件？（重复事件会删除整条系列）')) return;
+  try{ await fetch('/api/calendar/'+id,{method:'DELETE'}); loadCalendar(); }
+  catch(e){ toast('删除失败：'+esc(e)); }
+}
+
+// ── 全屏月历弹窗 ─────────────────────────────────────────────────────────────
+let _calView={y:0,m:0}, _calSelected=null, _calData={};
+function _ymd(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+
+function openCalModal(){
+  const t=new Date();
+  _calView={y:t.getFullYear(), m:t.getMonth()}; _calSelected=_ymd(t);
+  document.getElementById('calmodal').classList.add('active');
+  renderCalMonth().then(()=>renderCalSide(_calSelected));
+}
+function closeCalModal(){ document.getElementById('calmodal').classList.remove('active'); }
+function calMonthShift(d){
+  let m=_calView.m+d, y=_calView.y;
+  if(m<0){ m=11; y--; } if(m>11){ m=0; y++; }
+  _calView={y,m}; renderCalMonth().then(()=>renderCalSide(_calSelected));
+}
+function calGotoToday(){
+  const t=new Date();
+  _calView={y:t.getFullYear(), m:t.getMonth()}; _calSelected=_ymd(t);
+  renderCalMonth().then(()=>renderCalSide(_calSelected));
+}
+
+async function renderCalMonth(){
+  const {y,m}=_calView;
+  document.getElementById('calmodal-title').textContent=y+'年'+(m+1)+'月';
+  const first=new Date(y,m,1);
+  const dow=(first.getDay()+6)%7;                 // 周一为每周第一天
+  const gridStart=new Date(y,m,1-dow);
+  const gridEnd=new Date(gridStart); gridEnd.setDate(gridStart.getDate()+41);
+  let items=[];
+  try{ items=await (await fetch('/api/calendar/agenda?start='+_ymd(gridStart)+'&end='+_ymd(gridEnd))).json(); }catch(e){}
+  _calData={};
+  (items||[]).forEach(e=>{ const d=(e.start||'').slice(0,10); (_calData[d]=_calData[d]||[]).push(e); });
+  const grid=document.getElementById('calmodal-grid'); grid.innerHTML='';
+  const today=_ymd(new Date());
+  for(let i=0;i<42;i++){
+    const d=new Date(gridStart); d.setDate(gridStart.getDate()+i); const ds=_ymd(d);
+    const cell=document.createElement('div');
+    cell.className='cal-cell'+(d.getMonth()!==m?' oth':'')+(ds===today?' today':'')+(ds===_calSelected?' sel':'');
+    cell.dataset.ds=ds; cell.onclick=()=>calSelectDay(ds);
+    let h='<span class="dnum">'+d.getDate()+'</span>';
+    const evs=_calData[ds]||[];
+    evs.slice(0,3).forEach(e=>{
+      const tm=e.all_day?'':((e.start||'').slice(11,16)+' ');
+      h+='<div class="cal-ev k-'+(e.kind||'event')+'" title="'+esc(e.title||'')+'">'+esc(tm)+esc(e.title||'')+'</div>';
+    });
+    if(evs.length>3) h+='<div class="cal-more">+'+(evs.length-3)+' 更多</div>';
+    cell.innerHTML=h; grid.appendChild(cell);
+  }
+}
+
+function calSelectDay(ds){
+  _calSelected=ds;
+  document.querySelectorAll('#calmodal-grid .cal-cell').forEach(c=>c.classList.toggle('sel', c.dataset.ds===ds));
+  renderCalSide(ds);
+}
+
+function renderCalSide(ds){
+  document.getElementById('calside-title').textContent=ds||'选择日期';
+  const body=document.getElementById('calside-body');
+  const evs=(_calData[ds]||[]);
+  if(!evs.length){ body.innerHTML='<div class="muted">这天暂无日程。</div>'; return; }
+  body.innerHTML=evs.map(e=>{
+    const tm=e.all_day?'全天':((e.start||'').slice(11,16)||'');
+    const tag=CAL_TAGS[e.kind]?(' · '+CAL_TAGS[e.kind]):'';
+    const del=e.derived?'':'<button class="cal-del" title="删除" onclick="delCalEventM(\''+e.id+'\')">删</button>';
+    return '<div class="di"><div class="t">'+esc(e.title||'')+'<div class="tm">'+esc(tm)+esc(tag)+'</div></div>'+del+'</div>';
+  }).join('');
+}
+
+async function delCalEventM(id){
+  if(!confirm('删除这个事件？（重复事件会删除整条系列）')) return;
+  try{ await fetch('/api/calendar/'+id,{method:'DELETE'}); await renderCalMonth(); renderCalSide(_calSelected); }
+  catch(e){ toast('删除失败：'+esc(e)); }
+}
+
+async function calSideAdd(btn){
+  if(!_calSelected){ toast('先选一天'); return; }
+  const title=document.getElementById('calside-input').value.trim();
+  if(!title){ toast('请输入标题'); return; }
+  const time=document.getElementById('calside-time').value||'09:00';
+  const body={title, start:_calSelected+'T'+time};
+  const notify=document.getElementById('calside-notify').value;
+  if(notify){ try{ body.notify=JSON.parse(notify); }catch(_){ } }
+  btn.disabled=true;
+  try{
+    const r=await (await fetch('/api/calendar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    if(r.ok){ toast('已添加'); document.getElementById('calside-input').value=''; await renderCalMonth(); renderCalSide(_calSelected); }
+    else toast(r.message||'添加失败');
+  }catch(e){ toast('添加失败：'+esc(e)); }
+  finally{ btn.disabled=false; }
+}
+document.addEventListener('keydown', e=>{ if(e.key==='Escape' && document.getElementById('calmodal').classList.contains('active')) closeCalModal(); });
+
+const TIER_LABELS=[['action','待办'],['monitor','监控'],['status','状态 / 明细']];
+
+function renderDashboard(d){
+  const tiers=(d&&d.tiers)||{};
+  let html='';
+  for(const [tier,label] of TIER_LABELS){
+    const cards=tiers[tier]||[];
+    if(!cards.length) continue;
+    html+=`<div class="tier"><div class="tier-label">${esc(label)}</div>`;
+    cards.forEach(c=>html+=renderCard(c));
+    html+='</div>';
+  }
+  return html || '<div class="muted">暂无需要关注的内容。</div>';
+}
+
+function renderCard(c){
+  let inner='';
+  if((c.metrics||[]).length){
+    inner+='<div class="cards">'+c.metrics.map(m=>`<div class="mc"><div class="l">${esc(m.label)}</div><div class="v">${esc(m.value)}</div></div>`).join('')+'</div>';
+  }
+  if((c.items||[]).length){
+    inner+='<div class="card">'+c.items.map(renderCardItem).join('')+'</div>';
+  }
+  if(c.note) inner+=`<div class="muted" style="padding:4px 2px">${esc(c.note)}</div>`;
+  return `<div class="sec"><h2>${esc(c.title)}</h2>${inner}</div>`;
+}
+
+function renderCardItem(it){
+  const tone=it.tone?(' tone-'+it.tone):'';
+  const hasBadge=it.badge!==undefined&&it.badge!==null&&it.badge!=='';
+  const badge=hasBadge?`<span class="pill${tone}">${esc(it.badge)}</span>`:(it.tone?`<span class="dot${tone}" style="margin-top:6px"></span>`:'');
+  const url=it.url?`<a class="src" href="${esc(it.url)}" target="_blank" rel="noopener">↗</a>`:'';
+  let actions='';
+  if((it.actions||[]).length){
+    actions='<div class="rev-act">'+it.actions.map((a,i)=>`<button class="${i===0?'btn':'ghost'}" data-act='${esc(JSON.stringify({url:a.url,body:a.body||{}}))}'>${esc(a.label)}</button>`).join('')+'</div>';
+  }
+  const body=actions?`<div style="flex:1"><span class="txt">${esc(it.text)}</span>${actions}</div>`:`<span class="txt">${esc(it.text)}</span>`;
+  return `<div class="item">${badge}${body}${url}</div>`;
+}
+
+// 行内动作（待审核批准/忽略等）：事件委托，避免内联 onclick 的引号问题
+document.addEventListener('click',async(e)=>{
+  const btn=e.target.closest&&e.target.closest('#panel-intel [data-act]');
+  if(!btn) return;
+  let a; try{ a=JSON.parse(btn.getAttribute('data-act')); }catch(_){ return; }
+  try{
+    await fetch(a.url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(a.body||{})});
+    toast('已处理'); loadIntel();
+  }catch(_){ toast('操作失败'); }
+});
+
+const HBCOLOR={ok:'var(--green)',login_in_progress:'var(--yellow)',busy:'var(--yellow)',expired:'var(--red)',failed:'var(--red)',unknown:'var(--text-faint)',closing:'var(--text-faint)'};
+async function hbPost(url,msg){ try{ const d=await (await fetch(url,{method:'POST'})).json(); toast(msg||d.message); return d; }catch(e){ toast('操作失败'); } }
+let _hbPoll=null;
+function hbStartPoll(){ clearInterval(_hbPoll); let n=0; _hbPoll=setInterval(async()=>{ n++; await loadHubspot(); const d=await (await fetch('/api/hubspot/status')).json(); if(d.status==='ok'||d.status==='failed'||n>40) clearInterval(_hbPoll); },3000); }
+async function loadHubspot(){
+  const el=document.getElementById('settings-hubspot');
+  if(!el) return;
+  try{
+    const d=await (await fetch('/api/hubspot/status')).json();
+    el.innerHTML=`<div class="card" style="background:var(--bg-2);border:1px solid var(--border);border-radius:12px;padding:4px 14px"><div class="item" style="display:flex;align-items:center;gap:10px;padding:10px 0">
+      <span class="dot" style="width:8px;height:8px;border-radius:50%;background:${HBCOLOR[d.status]||'var(--text-faint)'}"></span>
+      <span class="txt" style="flex:1;font-size:13px">${esc(d.message)}</span>
+      <button class="btn" id="hb-login">登录</button>
+      <button class="ghost" id="hb-check">检测</button>
+      <button class="ghost" id="hb-close">关闭</button></div></div>`;
+    document.getElementById('hb-login').onclick=async()=>{ await hbPost('/api/hubspot/login','已在本机弹出 Chrome，请完成登录'); hbStartPoll(); };
+    document.getElementById('hb-check').onclick=async()=>{ toast('检测中…'); await hbPost('/api/hubspot/check'); loadHubspot(); };
+    document.getElementById('hb-close').onclick=async()=>{ await hbPost('/api/hubspot/close'); loadHubspot(); };
+  }catch(e){ el.innerHTML='<div class="muted">HubSpot 状态获取失败</div>'; }
+}
+
+// ── 定时任务面板（迁自原 /schedules）─────────────────────────────────────────
+const WEEK = {"1":"周一","2":"周二","3":"周三","4":"周四","5":"周五","6":"周六","0":"周日","7":"周日"};
+function cronToHuman(cron){
+  const p=(cron||"").trim().split(/\s+/);
+  if(p.length!==5) return cron||"—";
+  const [m,h,dom,mon,dow]=p;
+  if(!/^\d+$/.test(m)||!/^\d+$/.test(h)) return cron;
+  const hhmm=h.padStart(2,'0')+":"+m.padStart(2,'0');
+  if(dom==="*"&&mon==="*"&&dow==="*") return "每天 "+hhmm;
+  if(dom==="*"&&mon==="*"&&WEEK[dow]) return WEEK[dow]+" "+hhmm;
+  return cron;
+}
+function cronParts(cron){const p=(cron||"").trim().split(/\s+/); return p.length===5?p:["0","8","*","*","*"];}
+function shortNext(s){const m=String(s).match(/(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/); return m?m[1].slice(5)+' '+m[2]:s;}
+
+async function loadSchedules(){
+  loadPresets();
+  const list=document.getElementById('sched-list');
+  try{
+    const r=await fetch('/api/schedules'); const data=await r.json();
+    if(!data.length){ list.innerHTML='<div class="empty">还没有定时任务。对贾维斯说「每天8点给我推日报」即可创建。</div>'; return; }
+    list.innerHTML='';
+    data.forEach(t=>list.appendChild(schedRow(t)));
+  }catch(e){ list.innerHTML='<div class="err">加载失败：'+esc(e)+'</div>'; }
+}
+
+function schedRow(t){
+  const active = t.status==='active';
+  const wrap=document.createElement('div');
+  const row=document.createElement('div'); row.className='row';
+  row.innerHTML=`
+    <div class="meta">
+      <div class="name">${esc(t.name)}</div>
+      <div class="desc">${esc(t.description||'')}${t.next_run&&t.next_run!=='—'?' · 下次 '+esc(shortNext(t.next_run)):''}</div>
+    </div>
+    <div class="chip ${active?'':'off'}" title="点击修改时间">🕘 ${esc(cronToHuman(t.cron))}</div>
+    <label class="sw"><input type="checkbox" ${active?'checked':''}><span class="track"><span class="knob"></span></span></label>
+    <span class="sched-del" title="删除任务" style="cursor:pointer;color:var(--text-faint);font-size:17px;line-height:1;padding:0 2px">×</span>`;
+  const editor=document.createElement('div'); editor.className='editor';
+  const [m,h,dom,mon,dow]=cronParts(t.cron);
+  editor.innerHTML=`
+    <label>执行时间</label>
+    <div class="erow">
+      <input type="time" value="${h.padStart(2,'0')}:${m.padStart(2,'0')}">
+      <select>
+        <option value="*">每天</option>
+        <option value="1">每周一</option><option value="2">每周二</option><option value="3">每周三</option>
+        <option value="4">每周四</option><option value="5">每周五</option><option value="6">每周六</option><option value="0">每周日</option>
+      </select>
+      <button class="btn save">保存</button>
+      <button class="btn ghost cancel">取消</button>
+    </div>
+    <details class="adv"><summary>高级：直接写 cron</summary>
+      <input type="text" class="rawcron" placeholder="${esc(t.cron)}" value="${esc(t.cron)}">
+    </details>`;
+  editor.querySelector('select').value = (dom==="*"&&mon==="*"&&WEEK[dow]&&dow!=="*")?dow:"*";
+  row.querySelector('.chip').addEventListener('click',()=>editor.classList.toggle('open'));
+  editor.querySelector('.cancel').addEventListener('click',()=>editor.classList.remove('open'));
+  editor.querySelector('.save').addEventListener('click',()=>schedSaveCron(t.name, editor));
+  row.querySelector('input[type=checkbox]').addEventListener('change',e=>schedToggle(t.name, e.target));
+  row.querySelector('.sched-del').addEventListener('click',()=>schedDelete(t.name));
+  wrap.appendChild(row); wrap.appendChild(editor);
+  return wrap;
+}
+
+async function schedDelete(name){
+  if(!confirm(`删除定时任务「${name}」？不可恢复。`)) return;
+  try{
+    const d=await (await fetch(`/api/schedules/${encodeURIComponent(name)}`,{method:'DELETE'})).json();
+    toast(d.message||(d.ok?'已删除':'删除失败'));
+    if(d.ok) loadSchedules();
+  }catch(e){ toast('网络错误'); }
+}
+
+async function schedToggle(name, box){
+  const act = box.checked ? 'resume':'pause';
+  try{
+    const r=await fetch(`/api/schedules/${encodeURIComponent(name)}/${act}`,{method:'POST'});
+    const d=await r.json();
+    if(!d.ok){ box.checked=!box.checked; toast(d.message||'操作失败'); }
+    else toast(box.checked?'已启用':'已暂停');
+  }catch(e){ box.checked=!box.checked; toast('网络错误'); }
+}
+
+async function schedSaveCron(name, editor){
+  let cron;
+  const raw=editor.querySelector('.rawcron').value.trim();
+  const def=editor.querySelector('.rawcron').placeholder;
+  if(raw && raw!==def){ cron=raw; }
+  else{
+    const [hh,mm]=editor.querySelector('input[type=time]').value.split(':');
+    const dow=editor.querySelector('select').value;
+    cron=`${parseInt(mm)} ${parseInt(hh)} * * ${dow}`;
+  }
+  try{
+    const r=await fetch(`/api/schedules/${encodeURIComponent(name)}/cron`,{
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cron})});
+    const d=await r.json();
+    toast(d.message||(d.ok?'已更新':'失败'));
+    if(d.ok){ editor.classList.remove('open'); loadSchedules(); }
+  }catch(e){ toast('网络错误'); }
+}
+
+// ── 可启动任务预设目录 ───────────────────────────────────────────────────────
+const DOW_OPTS = `<option value="*">每天</option>
+  <option value="1">每周一</option><option value="2">每周二</option><option value="3">每周三</option>
+  <option value="4">每周四</option><option value="5">每周五</option><option value="6">每周六</option><option value="0">每周日</option>`;
+
+async function loadPresets(){
+  const box=document.getElementById('sched-presets');
+  if(!box) return;
+  try{
+    const data=await (await fetch('/api/schedules/presets')).json();
+    if(!data.length){ box.innerHTML='<div class="empty">暂无可启动预设。</div>'; return; }
+    box.innerHTML='';
+    data.forEach(p=>box.appendChild(presetCard(p)));
+  }catch(e){ box.innerHTML='<div class="err">预设加载失败：'+esc(e)+'</div>'; }
+}
+
+function presetCard(p){
+  const [m,h,dom,mon,dow]=cronParts(p.default_cron);
+  const el=document.createElement('div');
+  el.className='preset'+(p.started?' started':'');
+  const dis=p.started?'disabled':'';
+  el.innerHTML=`
+    <div class="name">${esc(p.title)}</div>
+    <div class="desc">${esc(p.description||'')}</div>
+    <div class="erow">
+      <input type="time" value="${h.padStart(2,'0')}:${m.padStart(2,'0')}" ${dis}>
+      <select ${dis}>${DOW_OPTS}</select>
+      <button class="btn start" ${dis}>${p.started?'已启动':'启动'}</button>
+    </div>`;
+  el.querySelector('select').value=(dom==="*"&&mon==="*"&&WEEK[dow]&&dow!=="*")?dow:"*";
+  if(!p.started) el.querySelector('.start').addEventListener('click',()=>startPreset(p.id, el));
+  return el;
+}
+
+async function startPreset(pid, el){
+  const [hh,mm]=el.querySelector('input[type=time]').value.split(':');
+  const dow=el.querySelector('select').value;
+  const cron=`${parseInt(mm)} ${parseInt(hh)} * * ${dow}`;
+  const btn=el.querySelector('.start'); btn.disabled=true;
+  try{
+    const r=await fetch(`/api/schedules/presets/${encodeURIComponent(pid)}/start`,{
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cron})});
+    const d=await r.json();
+    toast(d.message||(d.ok?'已启动':'启动失败'));
+    if(d.ok) loadSchedules(); else btn.disabled=false;
+  }catch(e){ toast('网络错误'); btn.disabled=false; }
+}
+
+// ── PWA: 注册 Service Worker（仅在 HTTPS / localhost 下生效）──────────────────
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch((e) =>
+      console.warn("Service Worker 注册失败：", e)
+    );
+  });
+}
 </script>
+<script src="/push.js"></script>
 </body>
 </html>
