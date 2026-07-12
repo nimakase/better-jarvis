@@ -144,8 +144,12 @@ def _to_openai_tool(defn: dict) -> dict:
 
 # ── 对话历史压缩 ──────────────────────────────────────────────────────────────
 
-async def _compress_history(client: AsyncOpenAI, messages: list) -> list:
-    """把超出软上限的早期消息压缩成摘要。"""
+async def _compress_history(client: AsyncOpenAI, messages: list, persist: bool = False) -> list:
+    """把超出软上限的早期消息压缩成摘要。
+
+    persist=True 时（仅真人会话），额外把摘要落进 L4 情节记忆并向量化，
+    避免"被压缩掉的早期对话用完即蒸发"。best-effort：任何异常都不影响主循环。
+    """
     total_chars = sum(len(str(m.get("content", ""))) for m in messages)
     estimated_tokens = total_chars // 2
     if len(messages) <= config.MAX_HISTORY_TURNS and estimated_tokens < config.CONTEXT_WINDOW_SOFT_LIMIT:
@@ -169,6 +173,16 @@ async def _compress_history(client: AsyncOpenAI, messages: list) -> list:
         ]
     )
     summary = resp.choices[0].message.content
+
+    # L4 情节记忆：把被压缩掉的早期对话摘要落盘并向量化，之后可被 recall 语义召回。
+    # 仅真人会话写入（persist=True）；后台/工作流实例不污染情节记忆。
+    # best-effort：嵌入/落盘任何异常都吞掉，绝不阻断主对话循环。
+    if persist and summary:
+        try:
+            from core import episodic
+            episodic.save(summary, tags=["auto-compress"], source="compress")
+        except Exception:
+            pass
 
     return [{"role": "user", "content": f"[早期对话摘要]\n{summary}"}] + keep
 
@@ -209,7 +223,8 @@ async def _execute_tool(name: str, inputs: dict) -> ToolResult:
 # 代码/调度等持久产物。这些只应由真人面对面的对话实例调用，否则后台跑潜客/采集/
 # 定时任务时会把它自己的临时任务塞进用户档案、或擅自自建工具/建调度（污染）。
 BACKGROUND_BLOCKED_TOOLS = {
-    "remember_fact",                                              # 写个人 core memory
+    "remember_fact",                                              # 写个人 core memory (L1)
+    "save_entity", "remember_episode",                           # 写实体(L2)/情节(L4)记忆
     "create_tool", "edit_tool", "delete_tool",                   # 自建/改/删工具
     "create_schedule", "delete_schedule", "pause_schedule", "resume_schedule",  # 改定时任务
 }
@@ -321,7 +336,7 @@ class JarvisController:
           - {"type": "tool", "name": "..."}  调用某工具的进度提示（传输层可低调渲染）
         """
         self.pending_actions = []
-        self.messages = await _compress_history(self.client, self.messages)
+        self.messages = await _compress_history(self.client, self.messages, persist=self.interactive)
         self.messages.append({"role": "user", "content": user_message})
 
         system = _build_system_prompt()
