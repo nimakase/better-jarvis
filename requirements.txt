@@ -17,6 +17,8 @@ pydantic-settings>=2.0.0
 pywebpush>=1.14.0
 python-dateutil>=2.8.0   # 内置日历 rrule 子集展开（core/calendar.py）
 pandas>=2.0.0            # prospecting/hubspot_worker.py 顶层依赖（HubSpot 匹配流程）
+numpy>=1.24.0           # core/embedding.py · core/episodic.py 顶层依赖（向量召回）
+fastembed>=0.3.0        # L4 情节记忆本地嵌入（可选；未装则自动降级为本地哈希向量，仍可用）
 # opencv-python / numpy 由 connectors/cred_ocr.py 直接 import；随 rapidocr-onnxruntime 传递安装，如需单独使用 OCR 模块可显式装：
 # opencv-python>=4.5.1.48
 # numpy>=1.19.5

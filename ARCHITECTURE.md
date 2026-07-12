@@ -1,7 +1,8 @@
 # 贾维斯（Jarvis）架构文档
 
 > 个人 AI 助理 · 本地优先（local-first）· 可安装 Python 包
-> 更新日期：2026-07-11 · 本次改动：内置日历（时间真源）+ 自我迭代反思闭环（self_review/self_iteration）+ 定时任务预设目录（schedule_presets）+ 文档保险箱 REST（web/documents）+ 部署隧道单一事实源（deploy/）+ 删除已下线模块（memory_tools/feishu/signal_intel/connectors.availability）
+> 更新日期：2026-07-12 · 本次改动：记忆分层扩展——新增**实体记忆 L2**（`core/entities.py`，精确查对象事实）+ **情节记忆 L4**（`core/episodic.py`＋本地嵌入 `core/embedding.py`，语义召回，长对话压缩摘要自动落盘）+ 记忆工具 `connectors/{entity,episodic}_tools.py` + `_compress_history` 自动持久化钩子。
+> 2026-07-11 · 内置日历（时间真源）+ 自我迭代反思闭环（self_review/self_iteration）+ 定时任务预设目录（schedule_presets）+ 文档保险箱 REST（web/documents）+ 部署隧道单一事实源（deploy/）+ 删除已下线模块（memory_tools/feishu/signal_intel/connectors.availability）
 
 ---
 
@@ -9,7 +10,7 @@
 
 ## 1. 一句话定位
 
-一个跑在本机的个人 AI 助理：FastAPI + WebSocket 后端，PWA 单页前端（聊天 + 右侧功能抽屉），主控模型走 OpenRouter（DeepSeek V4 Flash，`:online` 联网）。核心能力：**持久化对话历史**（跨刷新/设备回看）、**常驻用户档案 core memory**、证件保险箱、文档保险箱、文档读取、模型自建工具、定时任务、**可扩展报告框架**、**卡片化情报台**、**工作流引擎与注册表**（潜客→HubSpot）。高敏感数据（证件真实号码）严格隔离本机，绝不进对话历史/云端。
+一个跑在本机的个人 AI 助理：FastAPI + WebSocket 后端，PWA 单页前端（聊天 + 右侧功能抽屉），主控模型走 OpenRouter（DeepSeek V4 Flash，`:online` 联网）。核心能力：**持久化对话历史**（跨刷新/设备回看）、**分层记忆**（常驻用户档案 core memory + 按需的实体记忆 L2 精确查询 + 情节记忆 L4 本地向量语义召回）、证件保险箱、文档保险箱、文档读取、模型自建工具、定时任务、**可扩展报告框架**、**卡片化情报台**、**工作流引擎与注册表**（潜客→HubSpot）。高敏感数据（证件真实号码）严格隔离本机，绝不进对话历史/云端。
 
 现已是可安装项目（`pip install -e .` / wheel / Docker），配置走 pydantic-settings。
 
@@ -132,6 +133,12 @@ MemGPT/Letta 式 "core memory" 的轻量单用户版：一小块【每轮注入 
 ### 5.7b `core/history.py` — 对话持久层（新增）
 把对话 transcript 落盘到同一个 `memory.db`（`conversations` + `chat_messages` 两表，按 `conversation_id` 多会话设计），让用户**刷新 / 关标签 / 换设备后仍能回看此前对话**。`append`/`get_messages`/`clear`/`list_conversations`。当前前端只用一个固定的 `DEFAULT_CONVERSATION`（单一主对话），schema 已预留多会话、扩展零迁移。传输层每轮把 user/assistant 文本（及安全的文件卡片）落盘；**证件揭示等敏感动作绝不入库**。新会话控制器内存为空时由 `web/chat._seed_controller_from_history` 用历史文本回灌，使模型也能跨设备延续，而不仅是界面能回看。
 
+### 5.7c `core/entities.py` — 实体记忆 L2（新增 · 2026-07-12）
+关于「一个个具体对象」（客户 / 供应商 / 料号 / 报价等）的结构化事实，与 profile（关于用户本人）互补。通用 `kind + name + fields(JSON) + notes + tags` 模型，不为每种类型硬编码表结构；**精确匹配优先**（料号、公司名要准，不走向量），辅以子串模糊查。**不常驻** system prompt，由模型按需用工具查/记。存同一 `memory.db`（独立表 `entities`，`UNIQUE(kind,name)`、`upsert` 浅合并）。工具见 `connectors/entity_tools.py`（`save_entity`/`lookup_entity`/`search_entities`/`list_entities`）。
+
+### 5.7d `core/episodic.py` + `core/embedding.py` — 情节记忆 L4（新增 · 2026-07-12）
+一段段「发生过什么、聊过什么」的自由文本（对话摘要、过往结论），随时间累积、**不常驻**，由模型带着问题用 `recall(query)` **语义召回** top-k。写入两条来源：① `controller._compress_history` 把被压缩掉的「早期对话摘要」自动落盘并向量化（真人会话，补上原先"摘要用完即蒸发"的缺口，`source=compress`）；② 模型主动 `remember_episode`（`source=model`）。存同一 `memory.db`（独立表 `episodes`，向量以 blob 行内存储，每行记 `dim`，检索只比对同维度行）。`core/embedding.py` 为本地嵌入底座：优先 fastembed（`multilingual-e5-small`，onnxruntime 本机推理，**文本不出机器**），缺模型时自动降级为字符 3-gram 哈希向量，保证始终可用；单用户几千条量级直接 numpy 余弦，无需向量数据库。工具见 `connectors/episodic_tools.py`。写工具 `save_entity`/`remember_episode` 已入 `BACKGROUND_BLOCKED_TOOLS`，后台/工作流实例不写个人记忆。
+
 ### 5.8 `core/safety.py` — 输入边界
 `safe_name`/`safe_filename`/`under_base`：技能名、上传文件名、路径拼接的防穿越校验。
 
@@ -236,7 +243,9 @@ APScheduler；任务存 `schedules/<名>/config.json`；触发时用独立 `Jarv
 | 报告类型 | `core/reports` | 自描述报告 spec | `generate_report` 工具 / `/api/reports` |
 | 情报台卡片 | `core/intel_cards` | 仪表盘卡片 provider | `/api/intel/dashboard` |
 | 工作流 | `core/workflow_registry` | 多步骤工作流 | `run_workflow` 工具 / `/api/workflows` / 调度 |
-| 用户档案 | `core/profile` | 长期硬事实 | 每轮注入 system prompt |
+| 用户档案 L1 | `core/profile` | 关于用户的长期硬事实 | 每轮注入 system prompt |
+| 实体记忆 L2 | `core/entities` | 具体对象的结构化事实 | `lookup_entity`/`search_entities`/`save_entity`（按需） |
+| 情节记忆 L4 | `core/episodic`+`embedding` | 过往经过/摘要（向量） | `recall`（语义召回）/ 压缩自动落盘 |
 | 日历来源 | `core/calendar` | `register_source` 派生来源 | `agenda()` / `/api/calendar/agenda` |
 | 定时预设 | `core/schedule_presets` | 可启动任务预设 | 前端预设卡 / `create_from_preset` |
 
@@ -248,12 +257,19 @@ APScheduler；任务存 `schedules/<名>/config.json`；触发时用独立 `Jarv
 - **对话**（`/ws/chat` + `history`）：临时问答 + 持久 transcript。默认用对话回答，不产工件。
 - **报告/工作流产出**：**冻结成档的工件**（报告 PDF、潜客 xlsx），经结构化通道产出、归档、可在线查看，绝不污染对话。
 
-### 10.3 对话与记忆三层
+### 10.3 对话与记忆分层（2026-07-12 起从三层扩为常驻 + 按需两大类）
 
-- **工作记忆** `controller.messages`（含 `_compress_history` 压缩）。
-- **持久 transcript** `core/history.py`：落盘 + 回放 + 新会话回灌，跨刷新/设备续聊。
-- **core memory** `core/profile.py`：少量长期硬事实，每轮钉进 system prompt，不随历史淡化。
-- 旧的 key-value「记忆库」工具已下线（`memory_tools` 空壳已 `git rm`）；`core/memory.py` 降级为加密存储基础设施（vault / history / profile / calendar 共用同一 `memory.db`、各自独立表）。
+**每轮常驻（自动进 system prompt，无需工具读）：**
+- **工作记忆** `controller.messages`（含 `_compress_history` 压缩；真人会话压缩时把早期摘要自动落 L4）。
+- **core memory / 用户档案(L1)** `core/profile.py`：少量长期硬事实，每轮钉进 system prompt，不随历史淡化。
+
+**按需检索（不常驻，模型主动调工具捞）：**
+- **实体记忆(L2)** `core/entities.py`：具体对象（客户/料号等）的结构化事实，**精确+模糊查**，不走向量。工具 `lookup_entity`/`search_entities`/`save_entity`。
+- **情节记忆(L4)** `core/episodic.py` + `core/embedding.py`：过往对话摘要/经过的自由文本，**本地嵌入语义召回**（`recall`）；长对话压缩摘要自动入库，不再蒸发。
+
+**持久 transcript** `core/history.py`：落盘 + 回放 + 新会话回灌，跨刷新/设备续聊（供人回看/回灌，非语义检索层）。
+
+> 分工一句话：L1 管「我是谁、怎么做事」（常驻）；L2 管「精确的实体事实」（查表）；L4 管「过去发生过什么」（语义召回）。读走"常驻自动注入 / 按需工具捞"两条路；写走"模型判断 remember_*/save_entity + 压缩自动落 L4"。旧的 key-value「记忆库」工具仍是下线状态；`core/memory.py` 作为加密存储基础设施，被 vault / history / profile / calendar / **entities / episodic** 共用同一 `memory.db`、各自独立表。
 
 ### 10.4 工作流范式
 

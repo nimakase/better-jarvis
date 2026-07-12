@@ -12,6 +12,9 @@
 |------|------|
 | `core/self_model.py` | 边界定义自身；移动边界 = 拆护栏，必须人工 |
 | `core/self_iteration.py` | 自我迭代执行器；若可自改即可拆掉自己的护栏，必须人工 |
+| `core/self_review.py` | 反思闭环编排；自改即可绕过路由/送审，必须人工 |
+| `connectors/self_inspect.py` | 只读自省工具；改它=改自我认知入口，须人工 |
+| `connectors/self_review_tools.py` | 反思触发工具；同上 |
 | `tests/` | 测试是自动生效的安全网；若可自改即可作弊，必须人工 |
 | `config.py` | 配置与密钥载入 |
 | `main.py` | 装配入口；改坏即无法启动 |
@@ -36,6 +39,8 @@
 | `connectors/document.py` | 读文档 |
 | `connectors/doc_vault.py` | 文档保险箱 |
 | `connectors/profile_tools.py` | 写用户档案 |
+| `connectors/entity_tools.py` | 实体记忆(L2)工具：查/记客户·料号等对象 |
+| `connectors/episodic_tools.py` | 情节记忆(L4)工具：语义召回/记经过 |
 | `connectors/calendar_tools.py` | 日历工具 |
 | `connectors/calendar_providers.py` | 日历数据源 |
 | `connectors/calendar_card.py` | 日历情报卡 |
@@ -49,6 +54,9 @@
 | `core/delivery.py` | 投递业务逻辑 |
 | `core/availability.py` | 可用性/休假 |
 | `core/profile.py` | 用户档案业务规则 |
+| `core/entities.py` | 实体记忆(L2)存储与查询业务规则 |
+| `core/episodic.py` | 情节记忆(L4)存储与语义召回业务规则 |
+| `core/embedding.py` | 本地文本嵌入工具（无安全不变量，纯计算） |
 | `core/history.py` | 对话存档业务规则 |
 | `core/workflow_registry.py` | 工作流注册/运行记录 |
 | `core/skill_policy.py` | 技能策略 |
