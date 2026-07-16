@@ -12,11 +12,67 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import date
 from pathlib import Path
 
 from core import workflow as wf
 from core import workflow_registry as wr
+
+# 采集步骤专用的生成上限：信号采集要吐一大坨 JSON，远超通用对话的
+# config.MAX_TOKENS_RESPONSE（4096，那是给聊天回复定的护栏）。这里给采集
+# 单独的高预算，避免 JSON 被截断导致整批解析失败、入库 0 条。可用 env 覆盖。
+_COLLECT_MAX_TOKENS = int(os.environ.get("JARVIS_SIGNAL_COLLECT_MAX_TOKENS", "16000"))
+
+
+def _parse_signal_array(text: str) -> list:
+    """从模型输出里抽出信号数组；容忍前后说明文字与【尾部截断】。
+
+    先试整体解析；失败则按括号深度逐个抢救完整的顶层 {...} 对象，
+    丢掉被截断的最后一个——这样即使输出被 max_tokens 切断，也能拿到前面
+    已完整的那些信号，而不是整批归零。
+    """
+    if not text:
+        return []
+    start = text.find("[")
+    if start < 0:
+        return []
+    body = text[start:]
+    # 1) 正常情况：整体就是合法数组
+    end = body.rfind("]")
+    if end > 0:
+        try:
+            data = json.loads(body[:end + 1])
+            if isinstance(data, list):
+                return data
+        except Exception:
+            pass
+    # 2) 抢救：逐个提取完整的顶层对象，跳过被截断的尾巴
+    objs, depth, in_str, esc, obj_start = [], 0, False, False, None
+    for i, ch in enumerate(body):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                obj_start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and obj_start is not None:
+                try:
+                    objs.append(json.loads(body[obj_start:i + 1]))
+                except Exception:
+                    pass
+                obj_start = None
+    return objs
 
 _TOP_FIELDS = ("rank", "company_name", "intent_tier", "crm_state", "weight",
                "hubspot_owner", "surplus_signals", "website")
@@ -111,28 +167,41 @@ def _build_signal_collection():
     template = prompt_path.read_text(encoding="utf-8")
 
     async def collect(ctx: dict) -> list:
-        from core.controller import JarvisController
-        sc = JarvisController(interactive=False)  # 后台实例：不写用户档案/不自建工具
-        text = ""
-        async for ev in sc.chat(template):
-            # 只取正文 text；模型若误调工具，其进度走 type=="tool"，这里忽略
-            if isinstance(ev, dict) and ev.get("type") == "text":
-                text += ev["text"]
-        # 从输出里抽出 JSON 数组（容忍模型在数组前后带少量说明文字）
-        i, j = text.find("["), text.rfind("]")
-        if i >= 0 and j > i:
-            try:
-                data = json.loads(text[i:j + 1])
-                return data if isinstance(data, list) else []
-            except Exception:
-                return []
-        return []
+        # 采集不需要工具循环，只要一次带 :online 的文本补全。直连模型调用，
+        # 用采集专用的高 max_tokens（不受通用对话 4096 护栏限制），避免 JSON 截断。
+        import config
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(
+            api_key=config.OPENROUTER_API_KEY,
+            base_url=config.OPENROUTER_BASE_URL,
+        )
+        resp = await client.chat.completions.create(
+            model=config.CLAUDE_MODEL,          # 含 :online，可联网检索
+            max_tokens=_COLLECT_MAX_TOKENS,     # 采集专用高上限
+            messages=[{"role": "user", "content": template}],
+        )
+        text = (resp.choices[0].message.content or "") if resp.choices else ""
+        signals = _parse_signal_array(text)     # 抢救式解析，容忍尾部截断
+        if not signals:
+            # 明确报错而不是静默返回空——否则工作流会"显示成功但库是空的"。
+            raise RuntimeError(
+                f"采集未解析出任何信号（模型输出 {len(text)} 字）。"
+                "可能是模型没联网/没按 JSON 输出，或输出为空。"
+            )
+        return signals
 
     def ingest(ctx: dict) -> dict:
         signals = ctx.get("collect") or []
-        if not signals:
-            return {"inserted": 0, "merged": 0, "skipped": 0, "note": "采集未产出有效信号"}
-        return sl.ingest_signals(signals)
+        result = sl.ingest_signals(signals)
+        # 拿到了信号却一条都没落库（多半是 signal_type/scope 枚举不合规被逐条丢弃），
+        # 同样明确报错，把"静默 0 入库"暴露出来，便于定位。
+        if result.get("inserted", 0) == 0 and result.get("merged", 0) == 0:
+            raise RuntimeError(
+                f"解析到 {len(signals)} 条信号但入库 0 条"
+                f"（skipped={result.get('skipped', 0)}）。"
+                "多半是 signal_type/scope 枚举与约定不符，被入库层丢弃。"
+            )
+        return result
 
     return [
         wf.Step("collect", collect),
