@@ -1,6 +1,10 @@
 # 贾维斯（Jarvis）架构文档
 
 > 个人 AI 助理 · 本地优先（local-first）· 可安装 Python 包
+> 更新日期：2026-07-16 · 本次改动（多批）：
+> · **自建工具读/审/激活闭环**——新增 `read_tool_code`/`review_tool`/`activate_tool` 三个元工具：模型可按名读自建工具源码（消除"我读不了 py"幻觉）、随时重弹审查、对话内直接激活草稿，飞书通道也能完整闭环（`lark_bridge` 的 `code_review` 改为真正下发代码卡片）；`create_tool` 静态校验有阻断级错误时自动喂回重生成一次。
+> · **文档读取本地优先 + 云端 OCR 兜底**——`read_document` 先本地读；扫描件（无文字层）按敏感度分流：非敏感→OpenRouter `file-parser`（mistral-ocr）云端 OCR、敏感→仅本机并诚实报错、存疑→先问用户（`cloud=allow/deny` 重调）。新增 `core/sensitivity.py`（硬规则+轻模型判定）与 `PDF_CLOUD_FALLBACK/ENGINE`、`SENSITIVITY_LLM` 开关；本地空提取一律明确报错，不再静默假成功。
+>
 > 更新日期：2026-07-12 · 本次改动（多批）：
 > · **记忆分层扩展**——新增**实体记忆 L2**（`core/entities.py`，精确查对象事实）+ **情节记忆 L4**（`core/episodic.py`＋本地嵌入 `core/embedding.py`，语义召回，长对话压缩摘要自动落盘）+ 记忆工具 `connectors/{entity,episodic}_tools.py`。
 > · **飞书实时通道**——`lark_bridge.py`（官方 lark-oapi 长连接，后台线程 + 桥接回主循环），`main.lifespan` 守卫式启动，凭据入 `.env`。
@@ -81,7 +85,7 @@
 
 | 来源 | 位置 | 数量 | 信任级别 |
 |------|------|------|----------|
-| 元工具 | `core/tool_builder.py` | 11 | 第一方（管理系统自身） |
+| 元工具 | `core/tool_builder.py` | 14 | 第一方（管理系统自身） |
 | 连接器 | `connectors/document/credentials/doc_vault/delivery_control/report` | 多组 | 第一方（外部 API / 业务） |
 | 自建技能 | `skills/<名>/tool.py` | 运行时可变 | **不可信·沙箱** |
 
@@ -154,13 +158,17 @@ MemGPT/Letta 式 "core memory" 的轻量单用户版：一小块【每轮注入 
 `safe_name`/`safe_filename`/`under_base`：技能名、上传文件名、路径拼接的防穿越校验。
 
 ### 5.9 `core/tool_builder.py` — 工具自建系统
-模型运行时"写工具给自己用"。`create_tool`/`edit_tool` 调模型生成代码 → `validate_tool_code`（AST 沙箱：禁危险 import、查可疑模式、SQL 注入提示）→ 存草稿 → 前端审查（`code_review` 动作）→ 激活动态加载注册。元工具（建/改/删工具、定时任务、`send_file_to_chat`）在模块导入时自注册。`load_all_active_skills` 已加固：坏 `meta.json` 跳过告警而非崩溃。
+模型运行时"写工具给自己用"。`create_tool`/`edit_tool` 调模型生成代码 → `validate_tool_code`（AST 沙箱：禁危险 import、查可疑模式、SQL 注入提示）→ 存草稿 → 审查（`code_review` 动作）→ 激活动态加载注册。`create_tool` 生成后若静态校验有**阻断级错误**，会把错误喂回模型**自动重生成一次**，减少一上来就是坏代码的草稿。元工具（建/改/删工具、定时任务、`send_file_to_chat`）在模块导入时自注册。`load_all_active_skills` 已加固：坏 `meta.json` 跳过告警而非崩溃。
+
+读/审/激活三工具（2026-07-16）——把"造完工具后的处理"从依赖本机网页解耦，飞书对话内也能完整闭环：`read_tool_code(name)` 按名读源码+校验结果（并在描述里明确"你能读"，根治模型"读不了 py"的幻觉）；`review_tool(name)` 随时把某草稿的代码+校验重新调出来（网页重弹卡片 / 飞书重发代码），解决"审查窗口滚走后调不回来"；`activate_tool(name)` 对话内激活草稿（激活前重新静态校验），不再依赖网页「激活」按钮。三者均归 `authoring` 组；`activate_tool` 与建/改/删一样在后台/定时实例被 `BACKGROUND_BLOCKED_TOOLS` 屏蔽。飞书侧 `lark_bridge._dispatch_action` 的 `code_review` 分支已从"提示去本机网页"改为**真正下发代码 + 校验摘要卡片**，并提示回复「激活 X」即可生效。
 
 ### 5.10 `core/scheduler.py` — 定时任务
 APScheduler；任务存 `schedules/<名>/config.json`；触发时用独立 `JarvisController` 执行，结果写入本地文件投递。
 
 ### 5.11 `connectors/` — 第一方工具（全部 `@tool`）
-`document`（`read_document`）、`credentials`（证件 5 个）、`doc_vault`（文档保险箱）、`profile_tools`（`remember_fact` 写用户档案）、`calendar_tools`（内置日历建/读/改/删，group=`calendar`）、`self_review_tools`（`run_self_review` 触发自我迭代反思，group=`self`）；`vault`（证件加密存储核心）、`cred_ocr`（本地 OCR）、`calendar_providers`（派生来源 provider，导入即注册）、`calendar_card`（近期日程情报卡）为被调用的非工具助手/注册模块。
+`document`（`read_document`，见下）、`credentials`（证件 5 个）、`doc_vault`（文档保险箱）、`profile_tools`（`remember_fact` 写用户档案）、`calendar_tools`（内置日历建/读/改/删，group=`calendar`）、`self_review_tools`（`run_self_review` 触发自我迭代反思，group=`self`）；`vault`（证件加密存储核心）、`cred_ocr`（本地 OCR）、`calendar_providers`（派生来源 provider，导入即注册）、`calendar_card`（近期日程情报卡）为被调用的非工具助手/注册模块。
+
+**`connectors/document.py`（`read_document`）— 本地优先 + 云端 OCR 兜底（2026-07-16）**：支持 PDF/DOCX/XLSX/PPTX/CSV/TXT/图片。PDF 走决策树、隐私优先：① 先本地 `pdfplumber` 读，抽到足够文字（`_pdf_is_poor` 阈值判定）直接返回，零成本不上云；② 判为扫描件（几乎无文字层）时按 `core/sensitivity.py` 的敏感度分流——**非敏感**→ 交 OpenRouter `file-parser` 插件云端 OCR（`PDF_CLOUD_ENGINE`，默认 mistral-ocr）；**敏感**→ 绝不上云、仅本机并诚实报错；**存疑**→ 返回提示让模型先问用户，同意后以 `cloud="allow"` 重调、拒绝 `cloud="deny"`。③ 本地空提取 / Office 空壳一律明确报错，不再静默返回空壳。总开关 `PDF_CLOUD_FALLBACK`（设 0 彻底关闭云端）。`core/sensitivity.py` 判定顺序：硬规则·敏感（保险箱数据目录 / 文件名敏感词 / 局部内容出现身份证号·护照号·银行卡号 Luhn）→ 硬规则·非敏感（说明书/规格书/白皮书等公开技术资料）→ 轻模型语义兜底（`SENSITIVITY_LLM`，拿不准强制 `uncertain`，fail-safe）。
 
 ### 5.13 自我认知：`core/self_model.py` + `connectors/self_inspect.py`（新增）
 
@@ -211,7 +219,7 @@ APScheduler；任务存 `schedules/<名>/config.json`；触发时用独立 `Jarv
 ```
 
 ### 7.2 自建工具 / 定时任务
-与重构前一致：`create_tool → 生成 → 验证 → code_review 审查 → 激活动态加载`；`create_schedule → config.json + APScheduler → 触发用独立 Controller 执行 → 投递`。
+`create_tool → 生成（阻断级错误自动重生成一次）→ 验证 → code_review 审查 → 激活动态加载`；审查/激活不再只能走本机网页——`read_tool_code`/`review_tool`/`activate_tool` 让整条链在对话内（含飞书）闭环。`create_schedule → config.json + APScheduler → 触发用独立 Controller 执行 → 投递`。
 
 ---
 
