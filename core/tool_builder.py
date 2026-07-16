@@ -18,6 +18,7 @@
 import ast
 import importlib.util
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,11 @@ from typing import Optional
 from openai import AsyncOpenAI
 
 import config
+
+# 工具生成的输出上限（token）。工具偏大时，重写整份文件的输出很容易在结尾 TOOL_DEF
+# 处被截断，丢掉收尾的 }，导致"'{' was never closed"这类永远修不好的语法错误。
+# 给足预算 + 截断检测（见 _call_codegen）从根上避免。可用 env 覆盖。
+_TOOL_GEN_MAX_TOKENS = int(os.environ.get("JARVIS_TOOL_GEN_MAX_TOKENS", "16000"))
 from core.controller import register_tool
 from core.safety import safe_name, is_safe_name
 from core.results import ToolResult, Action
@@ -195,6 +201,39 @@ def _strip_markdown_fence(code: str) -> str:
     return code
 
 
+class CodeGenTruncated(Exception):
+    """代码生成因超出 token 上限被截断（finish_reason == 'length'）。"""
+
+
+async def _call_codegen(user_content: str, max_tokens: int = None) -> str:
+    """底层代码生成调用（create/edit 共用）：带【截断检测 + 自动加预算重试】。
+    若模型输出因触顶被截断（finish_reason == 'length'，典型症状=结尾 } 缺失），
+    自动加倍预算重试一次；仍截断则抛 CodeGenTruncated，交由上层给出清晰报错，
+    绝不把半截坏代码当成结果保存。"""
+    base = max_tokens or _TOOL_GEN_MAX_TOKENS
+    client = AsyncOpenAI(api_key=config.OPENROUTER_API_KEY, base_url=config.OPENROUTER_BASE_URL)
+    last_mt = base
+    for mt in (base, base * 2):
+        last_mt = mt
+        resp = await client.chat.completions.create(
+            model=config.CLAUDE_MODEL,
+            max_tokens=mt,
+            messages=[
+                {"role": "system", "content": CODE_GEN_PROMPT},
+                {"role": "user",   "content": user_content},
+            ],
+        )
+        choice = resp.choices[0]
+        code = _strip_markdown_fence((choice.message.content or "").strip())
+        if getattr(choice, "finish_reason", None) != "length":
+            return code
+        # 触顶截断 → 加倍预算再试
+    raise CodeGenTruncated(
+        f"代码生成被截断（已加到 {last_mt} tokens 仍超长）。这个工具可能太大——"
+        "建议拆成更小的工具，或调高 JARVIS_TOOL_GEN_MAX_TOKENS 后重试。"
+    )
+
+
 async def _generate_code(
     tool_name: str, user_request: str,
     prior_code: str = "", prior_errors: list = None,
@@ -208,16 +247,7 @@ async def _generate_code(
             + "\n".join(f"- {e}" for e in prior_errors)
             + f"\n\n上一版代码：\n{prior_code}"
         )
-    client = AsyncOpenAI(api_key=config.OPENROUTER_API_KEY, base_url=config.OPENROUTER_BASE_URL)
-    resp = await client.chat.completions.create(
-        model=config.CLAUDE_MODEL,
-        max_tokens=8192,
-        messages=[
-            {"role": "system", "content": CODE_GEN_PROMPT},
-            {"role": "user",   "content": user_content}
-        ]
-    )
-    return _strip_markdown_fence(resp.choices[0].message.content.strip())
+    return await _call_codegen(user_content)
 
 
 def validation_summary(v: dict) -> str:
@@ -443,19 +473,18 @@ async def edit_tool(name: str, change_request: str) -> str:
 
     prompt = f"以下是现有工具代码：\n\n{existing}\n\n请根据要求修改：{change_request}\n\n只输出完整的新代码，不要说明。"
     try:
-        client = AsyncOpenAI(api_key=config.OPENROUTER_API_KEY, base_url=config.OPENROUTER_BASE_URL)
-        resp = await client.chat.completions.create(
-            model=config.CLAUDE_MODEL,
-            max_tokens=8192,
-            messages=[
-                {"role": "system", "content": CODE_GEN_PROMPT},
-                {"role": "user",   "content": prompt}
-            ]
-        )
-        new_code = resp.choices[0].message.content.strip()
-        if new_code.startswith("```"):
-            lines = new_code.split("\n")
-            new_code = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        # 生成（含截断检测/加预算重试）；若静态校验有【阻断级】错误，把错误喂回自动重生成 1 次
+        new_code = await _call_codegen(prompt)
+        validation = validate_tool_code(new_code)
+        if not validation["ok"]:
+            fix_prompt = (
+                prompt
+                + "\n\n上一版没通过静态校验，请修复以下【阻断级错误】后重出完整代码：\n"
+                + "\n".join(f"- {e}" for e in validation["errors"])
+                + f"\n\n上一版代码：\n{new_code}"
+            )
+            new_code = await _call_codegen(fix_prompt)
+            validation = validate_tool_code(new_code)
 
         # 保留原始 description，不用 change_request 覆盖
         d = _skill_dir(name)
@@ -467,7 +496,6 @@ async def edit_tool(name: str, change_request: str) -> str:
             except Exception:
                 pass
 
-        validation = validate_tool_code(new_code)
         d.mkdir(exist_ok=True)
         (d / "tool.py").write_text(new_code, encoding="utf-8")
         meta = {
@@ -479,10 +507,13 @@ async def edit_tool(name: str, change_request: str) -> str:
             "validation": validation,
         }
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        message = f"工具 {name} 代码已修改，等待你审查并重新激活。"
-        return ToolResult(text=message, actions=[Action("code_review", {
+        note = "" if validation["ok"] else "（注意：静态校验仍未通过，见下方错误，可让我继续修）"
+        message = f"工具 {name} 代码已修改，等待你审查并重新激活。{note}"
+        return ToolResult(text=message + "\n\n" + validation_summary(validation), actions=[Action("code_review", {
             "name": name, "code": new_code, "validation": validation, "message": message,
         })])
+    except CodeGenTruncated as e:
+        return f"修改工具失败：{e}"
     except Exception as e:
         return f"修改工具失败：{e}"
 
