@@ -28,6 +28,10 @@ schedules/
 better jarvis/
 *_backup_*.zip
 
+# 个人档案 / 记忆导出（含真实隐私，绝不入库）
+核心记忆导出.txt
+用户档案框架.md
+
 # 系统文件
 .DS_Store
 Thumbs.db
