@@ -95,3 +95,65 @@ async def generate_report(report_type: str, params_json: str = "") -> str:
     rec = res["report"]
     return (f"报告已生成并归档（类型 {rec['type_name']}）：{rec['path']}\n"
             f"请调用 send_file_to_chat 把该 PDF 发给用户；可在报告中心在线查看。")
+
+
+# ── 找回已归档报告：解决"上午生成、下午找不到"——报告一直在磁盘且有归档索引，
+#    但此前模型没有查询入口。这里把现成的 reports.list_reports()/get_report() 暴露给模型。──
+from pathlib import Path as _Path
+
+
+def _fmt_rec(r: dict) -> str:
+    p = r.get("path") or ""
+    missing = "" if (p and _Path(p).exists()) else "（⚠️ 文件已不在磁盘，可能需重新生成）"
+    return (f"- [{r.get('date','')}] {r.get('title','')}"
+            f"（类型 {r.get('type_name','')}，id {r.get('id','')}）{missing}\n  路径：{p}")
+
+
+@tool(
+    "list_reports",
+    "列出【最近已生成并归档的报告】（标题 / 类型 / 日期 / 路径）。当用户提到"
+    "『之前那份 / 今天的 / 我上午生成的报告』或问『最近出过哪些报告』时，先用它找出来，"
+    "再对选中那份的路径调 send_file_to_chat 发送。报告存于磁盘、跨会话长期可查。",
+    {"type": "object", "properties": {
+        "limit": {"type": "integer", "description": "最多列出几条，默认 10"},
+    }},
+)
+async def list_reports(limit: int = 10) -> str:
+    recs = _reports.list_reports(limit=limit or 10)
+    if not recs:
+        return "还没有任何已归档的报告。"
+    return "最近归档的报告：\n" + "\n".join(_fmt_rec(r) for r in recs)
+
+
+@tool(
+    "find_report",
+    "按关键词 / 日期查找一份【已归档报告】并返回其文件路径，便于随后 send_file_to_chat 发送。"
+    "query 可以是标题片段、类型名、或日期（如 '今天' / '2026-07-12'）；留空则取最近一份。"
+    "用户说『把今天的行业报告发我』『发一下昨天那份日报』这类，先用它定位、再发。",
+    {"type": "object", "properties": {
+        "query": {"type": "string", "description": "标题 / 类型 / 日期关键词，可留空取最近一份"},
+    }},
+)
+async def find_report(query: str = "") -> str:
+    recs = _reports.list_reports(limit=100)
+    if not recs:
+        return "还没有任何已归档的报告。"
+    q = (query or "").strip().lower()
+    if q in ("今天", "今日", "今天的", "today"):
+        q = date.today().isoformat()
+    if not q:
+        matches = recs[:1]
+    else:
+        matches = [
+            r for r in recs
+            if q in (r.get("title", "") or "").lower()
+            or q in (r.get("type_name", "") or "").lower()
+            or q in (r.get("type", "") or "").lower()
+            or q in (r.get("date", "") or "").lower()
+        ]
+    if not matches:
+        return f"没找到匹配「{query}」的已归档报告。可用 list_reports 看看现有哪些。"
+    head = ("找到以下报告，选一份对其路径调 send_file_to_chat 发送："
+            if len(matches) > 1 else
+            "找到报告，可对其路径调 send_file_to_chat 发送：")
+    return head + "\n" + "\n".join(_fmt_rec(r) for r in matches[:5])
