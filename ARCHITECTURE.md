@@ -85,7 +85,7 @@
 
 | 来源 | 位置 | 数量 | 信任级别 |
 |------|------|------|----------|
-| 元工具 | `core/tool_builder.py` | 14 | 第一方（管理系统自身） |
+| 元工具 | `core/tool_builder.py` | 15 | 第一方（管理系统自身） |
 | 连接器 | `connectors/document/credentials/doc_vault/delivery_control/report` | 多组 | 第一方（外部 API / 业务） |
 | 自建技能 | `skills/<名>/tool.py` | 运行时可变 | **不可信·沙箱** |
 
@@ -161,6 +161,8 @@ MemGPT/Letta 式 "core memory" 的轻量单用户版：一小块【每轮注入 
 模型运行时"写工具给自己用"。`create_tool`/`edit_tool` 调模型生成代码 → `validate_tool_code`（AST 沙箱：禁危险 import、查可疑模式、SQL 注入提示）→ 存草稿 → 审查（`code_review` 动作）→ 激活动态加载注册。`create_tool` 生成后若静态校验有**阻断级错误**，会把错误喂回模型**自动重生成一次**，减少一上来就是坏代码的草稿。元工具（建/改/删工具、定时任务、`send_file_to_chat`）在模块导入时自注册。`load_all_active_skills` 已加固：坏 `meta.json` 跳过告警而非崩溃。
 
 读/审/激活三工具（2026-07-16）——把"造完工具后的处理"从依赖本机网页解耦，飞书对话内也能完整闭环：`read_tool_code(name)` 按名读源码+校验结果（并在描述里明确"你能读"，根治模型"读不了 py"的幻觉）；`review_tool(name)` 随时把某草稿的代码+校验重新调出来（网页重弹卡片 / 飞书重发代码），解决"审查窗口滚走后调不回来"；`activate_tool(name)` 对话内激活草稿（激活前重新静态校验），不再依赖网页「激活」按钮。三者均归 `authoring` 组；`activate_tool` 与建/改/删一样在后台/定时实例被 `BACKGROUND_BLOCKED_TOOLS` 屏蔽。飞书侧 `lark_bridge._dispatch_action` 的 `code_review` 分支已从"提示去本机网页"改为**真正下发代码 + 校验摘要卡片**，并提示回复「激活 X」即可生效。
+
+注册表可替换/可注销 + `update_tool_code`（2026-07-16）——修掉"编辑/重建已激活工具在不重启进程时刷新不了"的死结。根因：`register_spec` 旧语义是"重名首次优先、后者静默跳过"，且 `delete/deactivate` 从不动内存注册表 `_SPECS`——于是一个工具第一次激活后，其登记（schema+handler）就被永久锁死，edit/delete/recreate 都撬不动（表现为"框架缓存了旧注册信息"）。修法：① `ToolSpec` 加 `origin`（builtin/skill）；`register_skill_tool` 用 `replace=True` **允许自建技能替换自己之前的注册**（编辑→重激活即时生效），但**仍拒绝用技能覆盖第一方工具**；② `deactivate_skill`/`delete_skill` 调 `registry.unregister` 从运行中的注册表**即时注销**（第一方拒绝注销）；③ 新增元工具 `update_tool_code(name, code)`——把**确切代码原样写入**（不经模型改写/重生成），补上"我已写好完整代码、只想原样保存"的缺失入口（`create_tool`/`edit_tool` 都会让模型重写）。
 
 ### 5.10 `core/scheduler.py` — 定时任务
 APScheduler；任务存 `schedules/<名>/config.json`；触发时用独立 `JarvisController` 执行，结果写入本地文件投递。

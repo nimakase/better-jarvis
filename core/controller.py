@@ -277,7 +277,7 @@ async def _execute_tool(name: str, inputs: dict) -> ToolResult:
 BACKGROUND_BLOCKED_TOOLS = {
     "remember_fact",                                              # 写个人 core memory (L1)
     "save_entity", "remember_episode",                           # 写实体(L2)/情节(L4)记忆
-    "create_tool", "edit_tool", "delete_tool", "activate_tool",  # 自建/改/删/激活工具
+    "create_tool", "edit_tool", "delete_tool", "activate_tool", "update_tool_code",  # 自建/改/删/激活工具
     "create_schedule", "delete_schedule", "pause_schedule", "resume_schedule",  # 改定时任务
 }
 
