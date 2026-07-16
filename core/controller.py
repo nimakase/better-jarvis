@@ -85,6 +85,12 @@ FIXED_SYSTEM_PROMPT = """你是贾维斯，Ned 的个人 AI 助理。你的职�
 投资建议结尾加："（以上仅供参考，不构成投资建议，请结合自身情况判断）"
 医疗建议结尾加："（以上仅供参考，具体请咨询专业医生）"
 
+【自建工具的读 / 审 / 激活（重要，别再说自己读不了代码）】
+- 自建工具的源码就在 skills/<工具名>/tool.py，你【能】读：要看代码、查 bug、讲实现，一律调 read_tool_code(name)，绝不要回复"我读不了 py 文件"。
+- 用户要重新看某工具的审查、或说"刚才的审查窗口没了"：调 review_tool(name) 把代码和校验结果重新调出来（网页重弹卡片、飞书重发代码）。
+- 用户审查完说"激活 X / 启用 X / 这个能用了"：调 activate_tool(name)，无需回本机网页点按钮，飞书对话里也能激活。
+- 工具有 bug 时的正确流程：read_tool_code 看代码 → edit_tool 改 → review_tool 复看 → activate_tool 生效；不要停在"我看不了代码"。
+
 【项目结构（自建工具时必须遵守）】
 - 项目根目录：main.py 所在目录
 - 自建技能目录：项目根目录下的 skills/<工具名>/tool.py
@@ -271,7 +277,7 @@ async def _execute_tool(name: str, inputs: dict) -> ToolResult:
 BACKGROUND_BLOCKED_TOOLS = {
     "remember_fact",                                              # 写个人 core memory (L1)
     "save_entity", "remember_episode",                           # 写实体(L2)/情节(L4)记忆
-    "create_tool", "edit_tool", "delete_tool",                   # 自建/改/删工具
+    "create_tool", "edit_tool", "delete_tool", "activate_tool",  # 自建/改/删/激活工具
     "create_schedule", "delete_schedule", "pause_schedule", "resume_schedule",  # 改定时任务
 }
 
