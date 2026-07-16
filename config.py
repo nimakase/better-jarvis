@@ -94,6 +94,15 @@ class Settings(BaseSettings):
     # "过期"——仍照常出名单，但在推送/xlsx/情报台卡上标注"意向排序仅供参考"。
     signal_freshness_days: int = Field(default=7, validation_alias="JARVIS_SIGNAL_FRESHNESS_DAYS")
 
+    # 文档读取：本地优先，云端 OCR 兜底。仅当本地提取失败（扫描件/图片型 PDF、无文字层）
+    # 且文件被判定为【非敏感】时，才把 PDF 交给 OpenRouter 的 file-parser 插件做云端 OCR。
+    # 敏感或存疑一律留在本机（存疑会先问用户）。设 JARVIS_PDF_CLOUD_FALLBACK=0 彻底关闭云端。
+    pdf_cloud_fallback: bool = Field(default=True, validation_alias="JARVIS_PDF_CLOUD_FALLBACK")
+    # 云端 OCR 引擎：mistral-ocr（$2/1000 页，扫描件效果好）/ pdf-text（免费，仅文字层，等同本地）。
+    pdf_cloud_engine: str = Field(default="mistral-ocr", validation_alias="JARVIS_PDF_CLOUD_ENGINE")
+    # 敏感度判定是否在硬规则之外再调轻模型做语义判断（关掉则仅靠关键词/内容特征，其余一律存疑）。
+    sensitivity_llm: bool = Field(default=True, validation_alias="JARVIS_SENSITIVITY_LLM")
+
 
 settings = Settings()
 
@@ -121,6 +130,11 @@ PORT = settings.port
 
 PROSPECT_TREE_PATH = settings.prospect_tree_path
 SIGNAL_FRESHNESS_DAYS = settings.signal_freshness_days
+
+# 文档读取：云端 OCR 兜底
+PDF_CLOUD_FALLBACK = settings.pdf_cloud_fallback
+PDF_CLOUD_ENGINE   = settings.pdf_cloud_engine
+SENSITIVITY_LLM    = settings.sensitivity_llm
 
 # 渐进披露（默认开）
 PROGRESSIVE_TOOLS = settings.progressive_tools
