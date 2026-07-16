@@ -187,22 +187,50 @@ TOOL_DEF = {
 CODE_GEN_PROMPT = CODE_GEN_PROMPT.replace("__IMPORT_RULES__", import_rules_text())
 
 
-async def _generate_code(tool_name: str, user_request: str) -> str:
+def _strip_markdown_fence(code: str) -> str:
+    """去掉 AI 可能包的 markdown 代码块标记。"""
+    if code.startswith("```"):
+        lines = code.split("\n")
+        code = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    return code
+
+
+async def _generate_code(
+    tool_name: str, user_request: str,
+    prior_code: str = "", prior_errors: list = None,
+) -> str:
+    """生成工具代码。若传入 prior_code + prior_errors，则是"带错重生成"：
+    把上一版代码和阻断级错误一并喂回模型，让它修好再交（提升生成稳定性）。"""
+    user_content = f"工具名：{tool_name}\n需求：{user_request}"
+    if prior_code and prior_errors:
+        user_content += (
+            "\n\n上一版代码没通过静态校验，请修复以下【阻断级错误】后重出完整代码：\n"
+            + "\n".join(f"- {e}" for e in prior_errors)
+            + f"\n\n上一版代码：\n{prior_code}"
+        )
     client = AsyncOpenAI(api_key=config.OPENROUTER_API_KEY, base_url=config.OPENROUTER_BASE_URL)
     resp = await client.chat.completions.create(
         model=config.CLAUDE_MODEL,
         max_tokens=8192,
         messages=[
             {"role": "system", "content": CODE_GEN_PROMPT},
-            {"role": "user",   "content": f"工具名：{tool_name}\n需求：{user_request}"}
+            {"role": "user",   "content": user_content}
         ]
     )
-    code = resp.choices[0].message.content.strip()
-    # 去掉 AI 可能包的 markdown 代码块
-    if code.startswith("```"):
-        lines = code.split("\n")
-        code = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    return code
+    return _strip_markdown_fence(resp.choices[0].message.content.strip())
+
+
+def validation_summary(v: dict) -> str:
+    """把校验结果渲染成人/模型可读的一段文字（供 read/review/飞书卡片复用）。"""
+    if not v:
+        return "（无校验信息）"
+    parts = []
+    parts.append("✅ 静态校验通过" if v.get("ok") else "❌ 静态校验未通过")
+    if v.get("errors"):
+        parts.append("阻断级错误：\n" + "\n".join(f"  · {e}" for e in v["errors"]))
+    if v.get("warnings"):
+        parts.append("警告：\n" + "\n".join(f"  · {w}" for w in v["warnings"]))
+    return "\n".join(parts)
 
 
 # ── 保存 & 加载 ───────────────────────────────────────────────────────────────
@@ -342,6 +370,20 @@ def read_skill_code(name: str) -> Optional[str]:
     return tool_path.read_text(encoding="utf-8")
 
 
+def read_skill_meta(name: str) -> Optional[dict]:
+    """读取技能 meta.json（含 status / validation 等）。"""
+    try:
+        meta_path = _skill_dir(name) / "meta.json"
+    except ValueError:
+        return None
+    if not meta_path.exists():
+        return None
+    try:
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 def update_skill_code(name: str, new_code: str) -> tuple[bool, str]:
     """更新技能代码（保持当前激活状态不变，需重新激活才生效）。"""
     try:
@@ -370,10 +412,17 @@ async def create_tool(name: str, request: str) -> str:
         return f"工具 {name} 已存在。如需修改，请说「修改 {name} 工具」。"
 
     try:
+        # 生成 + 静态校验；若有【阻断级】错误，把错误喂回模型自动重生成 1 次，
+        # 尽量让到用户面前的草稿至少语法/结构过关（减少一上来就是坏代码）。
         code = await _generate_code(name, request)
         _, validation = save_skill_draft(name, code, request)
-        message = f"工具 {name} 代码已生成，等待你审查并激活。"
-        return ToolResult(text=message, actions=[Action("code_review", {
+        if not validation["ok"]:
+            code = await _generate_code(name, request, prior_code=code, prior_errors=validation["errors"])
+            _, validation = save_skill_draft(name, code, request)
+
+        note = "" if validation["ok"] else "（注意：静态校验仍未通过，见下方错误，可让我修）"
+        message = f"工具 {name} 代码已生成，等待你审查并激活。{note}"
+        return ToolResult(text=message + "\n\n" + validation_summary(validation), actions=[Action("code_review", {
             "name": name, "code": code, "validation": validation, "message": message,
         })])
     except Exception as e:
@@ -531,8 +580,46 @@ META_TOOL_DEFS = [
     },
     {
         "name": "list_tools_meta",
-        "description": "列出所有自建工具及其状态（激活/草稿/停用）。",
+        "description": "列出所有自建工具及其状态（激活/草稿/停用）。用户问「有哪些工具/待审的工具」时用。",
         "input_schema": {"type": "object", "properties": {}}
+    },
+    {
+        "name": "read_tool_code",
+        "description": (
+            "读取某个自建工具的完整源码 + 静态校验结果。"
+            "当用户要你看某工具代码、查 bug、讲解实现、或工具报错需要排查时用。"
+            "你【能】读自建工具的 py 代码——就用这个工具，不要说自己读不了。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"name": {"type": "string", "description": "工具名"}},
+            "required": ["name"]
+        }
+    },
+    {
+        "name": "review_tool",
+        "description": (
+            "把某个自建工具的代码 + 校验结果重新调出来供审查（网页重弹审查卡片、飞书重发代码卡片）。"
+            "当用户说「再给我看看 X 工具的代码 / 调出 X 的审查 / 刚才那个工具的审查窗口没了」时用。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"name": {"type": "string", "description": "工具名"}},
+            "required": ["name"]
+        }
+    },
+    {
+        "name": "activate_tool",
+        "description": (
+            "激活一个草稿（draft）工具使其立即生效（等价于网页里的「激活」按钮，飞书对话里也能用）。"
+            "当用户审查完代码后说「激活 X / 这个可以用了 / 启用 X 工具」时用。"
+            "激活前会自动重新静态校验，不过关会拒绝。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"name": {"type": "string", "description": "要激活的工具名"}},
+            "required": ["name"]
+        }
     },
     {
         "name": "send_file_to_chat",
@@ -663,6 +750,48 @@ async def _handle_edit_tool(name: str, change_request: str) -> str:
 async def _handle_list_tools_meta() -> str:
     return await list_tools_meta()
 
+async def _handle_read_tool_code(name: str) -> str:
+    """读取某个自建工具的代码 + 校验结果，直接返回给模型看（用于查 bug / 讲解）。"""
+    if not is_safe_name(name):
+        return f"工具名非法：{name!r}"
+    code = read_skill_code(name)
+    if code is None:
+        return f"工具 {name} 不存在（skills/{name}/tool.py 找不到）。"
+    meta = read_skill_meta(name) or {}
+    v = meta.get("validation") or validate_tool_code(code)
+    status = meta.get("status", "unknown")
+    return (
+        f"【工具 {name}】状态：{status}\n{validation_summary(v)}\n\n"
+        f"```python\n{code}\n```"
+    )
+
+async def _handle_activate_tool(name: str) -> str:
+    """通过对话激活一个 draft 工具（不再依赖网页按钮，飞书也能用）。
+    activate_skill 内部会激活前重新静态校验，不过关会拒绝。"""
+    if not is_safe_name(name):
+        return f"工具名非法：{name!r}"
+    ok, msg = activate_skill(name)
+    return ("✅ " if ok else "❌ ") + msg
+
+async def _handle_review_tool(name: str) -> str:
+    """随时把某个工具的代码 + 校验结果重新调出来审查（网页重弹审查卡片，
+    飞书重发代码卡片）。解决"审查窗口滚走后再也调不出来"。"""
+    if not is_safe_name(name):
+        return f"工具名非法：{name!r}"
+    code = read_skill_code(name)
+    if code is None:
+        return f"工具 {name} 不存在，无法审查。"
+    meta = read_skill_meta(name) or {}
+    v = meta.get("validation") or validate_tool_code(code)
+    status = meta.get("status", "unknown")
+    message = f"工具 {name}（当前状态：{status}）的代码如下，审查后可回复「激活 {name}」使其生效。"
+    return ToolResult(
+        text=message + "\n\n" + validation_summary(v),
+        actions=[Action("code_review", {
+            "name": name, "code": code, "validation": v, "message": message,
+        })],
+    )
+
 async def _handle_delete_tool(name: str) -> str:
     ok, msg = delete_skill(name)
     return msg
@@ -709,6 +838,9 @@ META_HANDLERS = {
     "create_tool":      _handle_create_tool,
     "edit_tool":        _handle_edit_tool,
     "list_tools_meta":  _handle_list_tools_meta,
+    "read_tool_code":   _handle_read_tool_code,
+    "review_tool":      _handle_review_tool,
+    "activate_tool":    _handle_activate_tool,
     "delete_tool":      _handle_delete_tool,
     "cleanup_drafts":   _handle_cleanup_drafts,
     "create_schedule":  _handle_create_schedule,
@@ -726,6 +858,7 @@ META_HANDLERS = {
 _META_GROUPS = {
     "create_tool": "authoring", "edit_tool": "authoring", "delete_tool": "authoring",
     "cleanup_drafts": "authoring", "list_tools_meta": "authoring",
+    "read_tool_code": "authoring", "review_tool": "authoring", "activate_tool": "authoring",
     "create_schedule": "scheduling", "list_schedules": "scheduling",
     "delete_schedule": "scheduling", "pause_schedule": "scheduling", "resume_schedule": "scheduling",
     "send_file_to_chat": "fileio",
