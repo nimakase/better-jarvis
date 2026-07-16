@@ -6,9 +6,25 @@
 """
 
 import json
+import os
 import asyncio
+import logging
 from datetime import datetime
 from typing import AsyncGenerator, Callable
+
+# 工具调用轮次上限（防跑飞）。默认 30，大工程也够用；可用 env 调。
+# 配合下面的「重复无进展」检测：真正的死循环会被快速识别提前停，
+# 所以把绝对上限放宽是安全的——不会因为任务大就误伤。
+_MAX_TOOL_ROUNDS = int(os.environ.get("JARVIS_MAX_TOOL_ROUNDS", "30"))
+# 连续多少轮"调用完全相同的工具+参数"判定为卡循环，提前停。
+_TOOL_STALL_LIMIT = int(os.environ.get("JARVIS_TOOL_STALL_LIMIT", "3"))
+# 单次模型调用超时（秒）。关键：SDK 默认高达 600s，一次卡住就会静默长挂、
+# 灯不黄也没回复。给个有界值，超时即报错而非无限等。
+_LLM_TIMEOUT = float(os.environ.get("JARVIS_LLM_TIMEOUT", "120"))
+# 历史压缩那次摘要调用用更紧的超时；失败/超时会退化（见 _compress_history），不拖垮整轮。
+_COMPRESS_TIMEOUT = float(os.environ.get("JARVIS_COMPRESS_TIMEOUT", "30"))
+# 压缩摘要的输入上限（字符），避免历史巨大时把摘要调用拖慢。
+_COMPRESS_INPUT_CAP = int(os.environ.get("JARVIS_COMPRESS_INPUT_CAP", "12000"))
 
 from openai import AsyncOpenAI
 
@@ -142,6 +158,27 @@ def _to_openai_tool(defn: dict) -> dict:
     }
 
 
+# ── 后台落盘助手（绝不阻塞事件循环）────────────────────────────────────────────
+
+def _safe_save_episode(text: str, tags: list, source: str) -> None:
+    """在后台线程里把一段情节落进 L4。任何异常都吞掉——best-effort，不影响对话。"""
+    try:
+        from core import episodic
+        episodic.save(text, tags=tags, source=source)
+    except Exception:
+        pass
+
+
+def _fire_and_forget(coro) -> None:
+    """发射即忘地跑一个协程：不 await、不阻塞回复；吞掉异常避免 asyncio 告警。
+    没有运行中的事件循环时（理论上不会发生）直接忽略。"""
+    try:
+        task = asyncio.create_task(coro)
+        task.add_done_callback(lambda t: t.exception())
+    except RuntimeError:
+        pass
+
+
 # ── 对话历史压缩 ──────────────────────────────────────────────────────────────
 
 async def _compress_history(client: AsyncOpenAI, messages: list, persist: bool = False) -> list:
@@ -163,26 +200,35 @@ async def _compress_history(client: AsyncOpenAI, messages: list, persist: bool =
         for m in to_compress
         if isinstance(m.get('content'), str)
     )
+    # 限制输入规模，保证摘要调用有界、不被巨大历史拖慢（取最近一段即可）。
+    if len(text_to_summarize) > _COMPRESS_INPUT_CAP:
+        text_to_summarize = text_to_summarize[-_COMPRESS_INPUT_CAP:]
 
-    resp = await client.chat.completions.create(
-        model=config.CLAUDE_MODEL_LIGHT,
-        max_tokens=512,
-        messages=[
-            {"role": "system", "content": "你是摘要助手，请简洁摘要对话历史。"},
-            {"role": "user", "content": f"请用中文简洁摘要以下对话历史，保留关键决定、事实和用户偏好：\n\n{text_to_summarize}"}
-        ]
-    )
-    summary = resp.choices[0].message.content
+    # 关键：这次摘要调用在【每轮对话最开头、出任何字之前】发生。一旦它卡住/超时，
+    # 整轮对话就静默冻住（灯不黄、无回复）。所以加紧超时 + 失败即优雅退化——
+    # 宁可这一轮省略早期历史，也绝不让它挂起主对话。
+    try:
+        resp = await client.chat.completions.create(
+            model=config.CLAUDE_MODEL_LIGHT,
+            max_tokens=512,
+            timeout=_COMPRESS_TIMEOUT,
+            messages=[
+                {"role": "system", "content": "你是摘要助手，请简洁摘要对话历史。"},
+                {"role": "user", "content": f"请用中文简洁摘要以下对话历史，保留关键决定、事实和用户偏好：\n\n{text_to_summarize}"}
+            ]
+        )
+        summary = resp.choices[0].message.content
+    except Exception as e:
+        logging.getLogger("jarvis.controller").warning("历史压缩摘要失败，退化省略早期历史：%s", e)
+        return [{"role": "user", "content": "[早期历史摘要生成失败，已省略早期对话]"}] + keep
 
     # L4 情节记忆：把被压缩掉的早期对话摘要落盘并向量化，之后可被 recall 语义召回。
     # 仅真人会话写入（persist=True）；后台/工作流实例不污染情节记忆。
-    # best-effort：嵌入/落盘任何异常都吞掉，绝不阻断主对话循环。
+    # 关键：嵌入是同步 CPU/IO（首次还会下载模型），绝不能在事件循环里同步跑，
+    # 否则会冻住整个服务。这里【发射即忘 + 丢到后台线程】，永不拖慢/阻塞回复。
     if persist and summary:
-        try:
-            from core import episodic
-            episodic.save(summary, tags=["auto-compress"], source="compress")
-        except Exception:
-            pass
+        _fire_and_forget(asyncio.to_thread(
+            _safe_save_episode, summary, ["auto-compress"], "compress"))
 
     return [{"role": "user", "content": f"[早期对话摘要]\n{summary}"}] + keep
 
@@ -237,6 +283,7 @@ class JarvisController:
         self.client = AsyncOpenAI(
             api_key=config.OPENROUTER_API_KEY,
             base_url=config.OPENROUTER_BASE_URL,
+            timeout=_LLM_TIMEOUT,   # 有界超时，杜绝 SDK 默认 600s 的静默长挂
         )
         self.messages: list[dict] = []
         self.pending_actions: list = []
@@ -342,7 +389,9 @@ class JarvisController:
         system = _build_system_prompt()
 
         tool_rounds = 0
-        MAX_TOOL_ROUNDS = 12   # 工具调用轮次上限，防止无限调工具不收尾
+        MAX_TOOL_ROUNDS = _MAX_TOOL_ROUNDS   # 工具调用轮次上限（env 可调，默认 30）
+        last_sig = None      # 上一轮工具调用签名，用于识别"重复无进展"的卡循环
+        stall = 0
         while True:
             # 每轮重算暴露的工具集：渐进披露下，上一轮的 load_tools 会在这里生效。
             # 关闭时这等价于一次性的全量列表（仅多一次廉价的 dict 构造）。
@@ -395,12 +444,27 @@ class JarvisController:
                 self.messages.append({"role": "assistant", "content": full_text})
                 break
 
-            # 防死循环：工具调用轮次上限。超过则停止，避免无限调工具不收尾。
+            # 卡循环检测：本轮工具调用与上一轮完全相同（同名+同参）视为无进展。
+            # 连续 _TOOL_STALL_LIMIT 轮如此则判定卡死，提前停——这才是低上限真正
+            # 想防的东西；直接识别它，就能把绝对上限放宽而不误伤正常的大任务。
+            sig = tuple(sorted((tc["name"], tc["arguments"]) for tc in tool_call_accum.values()))
+            stall = stall + 1 if sig == last_sig else 0
+            last_sig = sig
+            if stall >= _TOOL_STALL_LIMIT:
+                note = ("检测到连续重复调用同一工具且没有进展，先停下（疑似卡循环）。"
+                        "换个思路或把这一步说得更具体些，我再试。")
+                yield {"type": "text", "text": "\n⚠️ " + note + "\n"}
+                self.messages.append({"role": "assistant", "content": note})
+                break
+
+            # 绝对上限：防止意外跑飞。达到后【不丢进度】——工具结果都在会话历史里，
+            # 直接回复「继续」即可从断点接着做，而不是前功尽弃。
             tool_rounds += 1
             if tool_rounds > MAX_TOOL_ROUNDS:
-                note = (f"已连续调用工具 {MAX_TOOL_ROUNDS} 轮仍未完成，先停下避免死循环。"
-                        f"可能是需求太宽或缺合适工具——请把任务拆细些，或换个说法再试。")
-                yield {"type": "text", "text": "\n⚠️ " + note + "\n"}
+                note = (f"这一步比较大，已连续调用工具 {MAX_TOOL_ROUNDS} 轮，先暂停一下"
+                        f"（防止意外跑飞）。进度都在——直接回复「继续」我就接着往下做；"
+                        f"或者把剩下的部分说得更具体些也行。")
+                yield {"type": "text", "text": "\n⏸️ " + note + "\n"}
                 self.messages.append({"role": "assistant", "content": note})
                 break
 

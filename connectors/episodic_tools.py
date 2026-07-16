@@ -8,6 +8,7 @@ remember_episode：模型判断某段经过值得长期记住时主动存（写�
 长对话压缩产生的「早期对话摘要」由 controller._compress_history 自动写入，
 无需模型操心——这补上了原先"摘要用完即弃"的缺口。
 """
+import asyncio
 from functools import partial
 
 from core import episodic
@@ -30,7 +31,8 @@ tool = partial(_tool, group="memory")
     },
 )
 async def recall(query: str, k: int = 5) -> str:
-    hits = episodic.recall(query, k=k or 5)
+    # 嵌入是同步 CPU/IO（首次还会下载模型）→ 丢到后台线程，绝不阻塞事件循环。
+    hits = await asyncio.to_thread(episodic.recall, query, k or 5)
     if not hits:
         return "情节记忆里没有相关内容。"
     lines = []
@@ -55,4 +57,5 @@ async def recall(query: str, k: int = 5) -> str:
     },
 )
 async def remember_episode(text: str, tags: list = None) -> str:
-    return episodic.save(text, tags=tags, source="model")["message"]
+    res = await asyncio.to_thread(episodic.save, text, tags=tags, source="model")
+    return res["message"]
