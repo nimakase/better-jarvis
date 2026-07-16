@@ -136,6 +136,26 @@ PDF_CLOUD_FALLBACK = settings.pdf_cloud_fallback
 PDF_CLOUD_ENGINE   = settings.pdf_cloud_engine
 SENSITIVITY_LLM    = settings.sensitivity_llm
 
+
+# ── 供自建技能读取的配置（导出到 os.environ）────────────────────────────────
+# 自建技能被沙箱禁止 import config/core，调 LLM 时只能从 os.environ 读密钥与模型。
+# 但配置是 pydantic-settings 从 .env 读进来的，并不会自动进 os.environ——于是技能
+# 要么读不到密钥直接报错，要么模型键缺失退回硬编码的错误默认值。这里把【技能确实
+# 需要、且非敏感】的几项显式写回进程环境，让技能拿到与 app 完全一致的值。
+# 【安全】只导出下列白名单；MEMORY_ENCRYPTION_KEY 等敏感项绝不导出。
+def _export_env_for_skills() -> None:
+    for k, v in {
+        "OPENROUTER_API_KEY":  OPENROUTER_API_KEY,
+        "OPENROUTER_BASE_URL": OPENROUTER_BASE_URL,
+        "CLAUDE_MODEL":        CLAUDE_MODEL,
+        "CLAUDE_MODEL_LIGHT":  CLAUDE_MODEL_LIGHT,
+    }.items():
+        if v:
+            os.environ[k] = v
+
+
+_export_env_for_skills()
+
 # 渐进披露（默认开）
 PROGRESSIVE_TOOLS = settings.progressive_tools
 CORE_TOOL_NAMES   = tuple(
