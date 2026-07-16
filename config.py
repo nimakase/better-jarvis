@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     memory_encryption_key: str = ""    # 留空则首次运行自动生成并存系统钥匙串
 
+    # 飞书（Lark）长连接凭据。两者都填才启用飞书桥；留空则不启动（见 main.lifespan）。
+    # 绝不硬编码进源码——从 .env 读，避免随 git 泄露。
+    feishu_app_id: str = ""
+    feishu_app_secret: str = ""
+
     # 模型（OpenRouter 格式 provider/model-name；:online 启用内置联网）
     claude_model: str = "deepseek/deepseek-v4-flash:online"
     claude_model_light: str = "deepseek/deepseek-v4-flash"
@@ -100,6 +105,9 @@ CLAUDE_MODEL_LIGHT  = settings.claude_model_light
 
 MEMORY_DB_PATH        = DATA_DIR / "memory.db"
 MEMORY_ENCRYPTION_KEY = settings.memory_encryption_key
+
+FEISHU_APP_ID     = settings.feishu_app_id
+FEISHU_APP_SECRET = settings.feishu_app_secret
 
 MAX_HISTORY_TURNS         = settings.max_history_turns
 MAX_TOKENS_RESPONSE       = settings.max_tokens_response

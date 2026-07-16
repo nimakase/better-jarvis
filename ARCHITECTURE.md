@@ -1,7 +1,11 @@
 # 贾维斯（Jarvis）架构文档
 
 > 个人 AI 助理 · 本地优先（local-first）· 可安装 Python 包
-> 更新日期：2026-07-12 · 本次改动：记忆分层扩展——新增**实体记忆 L2**（`core/entities.py`，精确查对象事实）+ **情节记忆 L4**（`core/episodic.py`＋本地嵌入 `core/embedding.py`，语义召回，长对话压缩摘要自动落盘）+ 记忆工具 `connectors/{entity,episodic}_tools.py` + `_compress_history` 自动持久化钩子。
+> 更新日期：2026-07-12 · 本次改动（多批）：
+> · **记忆分层扩展**——新增**实体记忆 L2**（`core/entities.py`，精确查对象事实）+ **情节记忆 L4**（`core/episodic.py`＋本地嵌入 `core/embedding.py`，语义召回，长对话压缩摘要自动落盘）+ 记忆工具 `connectors/{entity,episodic}_tools.py`。
+> · **飞书实时通道**——`lark_bridge.py`（官方 lark-oapi 长连接，后台线程 + 桥接回主循环），`main.lifespan` 守卫式启动，凭据入 `.env`。
+> · **主循环健壮性**——模型调用加超时（防 600s 静默长挂）；`_compress_history` 摘要调用超时即优雅退化；工具轮次上限 12→30（env 可调）+ 重复无进展的卡循环检测；嵌入落盘一律 `asyncio.to_thread` 后台化，绝不阻塞事件循环。
+> · **信号采集修复**——采集改直连高 token 调用 + 抢救式 JSON 解析（容忍截断）+ 0 信号明确报错（`intel/workflow_defs.py`）。
 > 2026-07-11 · 内置日历（时间真源）+ 自我迭代反思闭环（self_review/self_iteration）+ 定时任务预设目录（schedule_presets）+ 文档保险箱 REST（web/documents）+ 部署隧道单一事实源（deploy/）+ 删除已下线模块（memory_tools/feishu/signal_intel/connectors.availability）
 
 ---
@@ -106,6 +110,11 @@
 
 **前端单页 + 右侧抽屉**：`frontend/index.html` 是常驻聊天页，头部「情报台 / 定时任务 / 保险箱 / 设置」统一开同一个右侧 slide-over 抽屉（`#drawer`，标签切换面板），不再整页跳转——WS 不断、对话不丢。原 `/intel`、`/schedules` 独立页保留可直达，但内容已迁入抽屉面板复用同一批 REST API。「记忆库」按钮已移除。
 
+### 5.2a `lark_bridge.py` — 飞书实时通道（新增 · 2026-07-12）
+除网页 WebSocket 外的**第二条入站通道**：让用户直接在飞书里和贾维斯对话。用飞书官方 **lark-oapi 长连接**（`lark.ws.Client`）——飞书长连接是官方 SDK 封装的私有握手协议，无法手写 wss 端点对接，故必须用 SDK。集成三要点，均为「不阻塞主服务」而设计：① SDK 的 `ws.Client.start()` 阻塞 → 放**后台守护线程**，并给该线程**独立的新事件循环**（否则会抢到正在运行的主循环报 `event loop is already running`）；② 事件回调是同步、在 SDK 线程里触发 → 用 `run_coroutine_threadsafe` **桥接回主事件循环**去 await 现有 `controller.chat()`；③ 发/更新卡片是同步 HTTP → `asyncio.to_thread` 包一层。每个飞书用户一个独立会话（`lark_<open_id>`，与网页会话隔离，但共享全部长期存储：档案/实体/情节/日历/保险箱）。由 `main.lifespan` **守卫式启动**：仅当 `config.FEISHU_APP_ID/SECRET` 都配置时才起，且整段 `try` 包裹——飞书任何问题绝不拖垮主服务。凭据入 `.env`，不硬编码。依赖 `lark-oapi`（注意其长连接依赖 protobuf<4.21.1，可能与 onnxruntime/fastembed 冲突）。
+
+**能力对齐网页（目标：尽量替代前端）**：① **对话持久化 + 回灌**——飞书对话按 `lark_<open_id>` 落 `core/history`，新会话/回收后 `_seed` 从历史回灌，跨重启续聊；② **带外动作对等分发**——`file_download` 走飞书**图片/文件消息**上传投递（`im.v1.image/file.create`）；③ **证件安全边界**——`credential_reveal` 在飞书侧**一律拒绝**（真实号码绝不经飞书云端，引导去本机网页），`code_review` 提示需本机网页操作；④ `/reset` 清空该用户会话与历史。差异（当前有意保留）：飞书无逐字流式（占位卡片→整段更新覆盖）、不显示工具进度。
+
 ### 5.3 `core/registry.py` — 工具注册中心
 见第 4 节。全项目工具的单一事实来源。
 
@@ -119,6 +128,8 @@
 `JarvisController` 持有 `AsyncOpenAI` 客户端、`messages`、`pending_actions`。`chat()` 组装 system prompt（人格+时间+**联网能力声明**）→ 流式调用 → 工具调用循环（`_execute_tool` 统一经 `registry.get_handler`，结果归一化为 `ToolResult`，动作累积到 `pending_actions`）。已无全局单例、无 BUILTIN 双路径。
 
 **结构化事件双通道（2026-06-17）**：`chat()` 不再 `yield` 裸字符串，而是产出 dict 事件——`{"type":"text","text":...}`（模型正文分片）与 `{"type":"tool","name":...}`（工具进度）。把「对话内容」和「工具进度」彻底分开：进度不再混进正文、不会残留进历史，传输层据此发两种 WS 帧（`chunk` / `tool_status`），前端把 `tool_status` 渲染成低调 chip。`scheduler` 也只累加 `text` 事件。
+
+**健壮性（2026-07-12）**：① 模型调用**加超时**（`_LLM_TIMEOUT` 默认 120s，env 可调）——此前 SDK 默认 600s，一次卡住就静默长挂、灯不黄也没回复。② `_compress_history` 的摘要调用在每轮最开头、出任何字之前发生，一旦卡住整轮就冻住 → 给它更紧的超时 + **失败即优雅退化**（省略早期历史继续对话，绝不挂起）+ 限制摘要输入规模。③ 工具轮次上限从写死 12 提到 `_MAX_TOOL_ROUNDS`（默认 30，env 可调），并新增**卡循环检测**（连续数轮调用完全相同即判无进展、提前停）；到上限时**不丢进度**，提示回复「继续」可从断点续跑。④ L4 情节落盘/召回的嵌入（同步、首次下载模型）一律 `asyncio.to_thread` 后台化 + 压缩钩子发射即忘，**绝不阻塞事件循环**。
 
 **联网自知**：`_network_capability_note()` 据 `config.CLAUDE_MODEL` 是否含 `:online` 在 system prompt 里明确告知模型"能/不能联网"，避免模型凭空拒绝或假装联网。
 

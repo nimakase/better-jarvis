@@ -62,8 +62,36 @@ async def lifespan(app: FastAPI):
     register_builtin_jobs()          # 内置提醒巡检（每 1 分钟）
     scheduler = get_scheduler()
     scheduler.start()
+
+    # 飞书（Lark）实时通道：仅在配置了 App 凭据时启动。整段用 try 包裹——
+    # 飞书桥任何问题（未装 lark-oapi、凭据错、网络）都【绝不能】拖垮主服务启动。
+    app.state.lark_bridge = None
+    if config.FEISHU_APP_ID and config.FEISHU_APP_SECRET:
+        try:
+            from lark_bridge import LarkBridge
+
+            async def _get_lark_controller(open_id: str):
+                # 每个飞书用户一个独立会话（lark_ 前缀，与网页会话隔离）
+                return app.state.ctx.sessions.get(f"lark_{open_id}")
+
+            bridge = LarkBridge(
+                config.FEISHU_APP_ID, config.FEISHU_APP_SECRET,
+                get_controller=_get_lark_controller,
+            )
+            await bridge.start()
+            app.state.lark_bridge = bridge
+        except Exception as _e:
+            import logging as _logging
+            _logging.getLogger("jarvis").warning("飞书桥启动失败（不影响主服务）：%s", _e)
+
     yield
-    # 关闭：停止调度器
+
+    # 关闭：先停飞书桥（若有），再停调度器
+    if getattr(app.state, "lark_bridge", None):
+        try:
+            await app.state.lark_bridge.stop()
+        except Exception:
+            pass
     scheduler.shutdown(wait=False)
 
 
