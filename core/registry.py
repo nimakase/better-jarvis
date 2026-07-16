@@ -28,6 +28,7 @@ class ToolSpec:
     input_schema: dict
     handler: Callable
     group: str = "general"   # 领域分组，为将来 controller 渐进披露铺路（默认 general）
+    origin: str = "builtin"  # "builtin"=第一方(连接器/元工具) | "skill"=运行时自建技能
 
 
 # 注册表：name -> ToolSpec；_order 保留注册顺序（影响呈现给模型的顺序）
@@ -35,27 +36,37 @@ _SPECS: dict[str, ToolSpec] = {}
 _ORDER: list[str] = []
 
 
-def register_spec(spec: ToolSpec) -> None:
-    """注册一个 ToolSpec。重名跳过（首次注册优先），并打一条告警。
+def register_spec(spec: ToolSpec, replace: bool = False) -> bool:
+    """注册一个 ToolSpec，返回是否成功登记。
 
-    "首次注册优先"是刻意的安全语义：第一方工具（连接器/元工具）在启动时先注册，
-    自建技能随后加载；若自建技能撞名第一方，后者被忽略而非覆盖。但撞名以前是
-    *静默* 丢弃、难以排查——这里改为告警，点明撞的是哪个名、新旧各属哪个组。
+    默认 replace=False：重名跳过（首次注册优先）——第一方工具（连接器/元工具）
+    启动时先注册，撞名者被忽略并告警。
+
+    replace=True（自建技能重激活/更新用）：允许覆盖【同名的已有技能注册】，
+    使"编辑工具→重新激活"能在不重启进程的情况下即时生效。但仍**绝不允许**用
+    自建技能覆盖第一方工具（origin=="builtin"）——安全边界保留。
     """
-    if spec.name in _SPECS:
-        existing = _SPECS[spec.name]
-        logger.warning(
-            "工具重名，忽略后注册者（保留先注册的）：name=%r 已存在(group=%r)，"
-            "跳过新注册(group=%r)。若是自建技能撞了第一方工具名，请给技能改名。",
-            spec.name, existing.group, spec.group,
-        )
-        return
+    existing = _SPECS.get(spec.name)
+    if existing is not None:
+        if not replace:
+            logger.warning(
+                "工具重名，忽略后注册者（保留先注册的）：name=%r 已存在(group=%r)，"
+                "跳过新注册(group=%r)。若是自建技能撞了第一方工具名，请给技能改名。",
+                spec.name, existing.group, spec.group,
+            )
+            return False
+        if existing.origin == "builtin" and spec.origin != "builtin":
+            logger.warning("拒绝用自建技能覆盖第一方工具：name=%r", spec.name)
+            return False
+        _SPECS[spec.name] = spec          # 原位替换，_ORDER 位置不变
+        return True
     _SPECS[spec.name] = spec
     _ORDER.append(spec.name)
+    return True
 
 
 def register_tool(definition: dict, handler: Callable) -> None:
-    """兼容旧写法：用 input_schema 格式的 dict + handler 注册。"""
+    """兼容旧写法：用 input_schema 格式的 dict + handler 注册（第一方，首次优先）。"""
     register_spec(ToolSpec(
         name=definition["name"],
         description=definition.get("description", ""),
@@ -63,6 +74,39 @@ def register_tool(definition: dict, handler: Callable) -> None:
         handler=handler,
         group=definition.get("group", "general"),
     ))
+
+
+def register_skill_tool(definition: dict, handler: Callable) -> tuple[bool, str]:
+    """注册/更新一个【自建技能】工具（origin="skill"，允许替换自己之前的注册）。
+    返回 (ok, message)。撞第一方工具名时拒绝并给出可读原因。"""
+    spec = ToolSpec(
+        name=definition["name"],
+        description=definition.get("description", ""),
+        input_schema=definition.get("input_schema", dict(_EMPTY_SCHEMA)),
+        handler=handler,
+        group=definition.get("group", "general"),
+        origin="skill",
+    )
+    if register_spec(spec, replace=True):
+        return True, "ok"
+    return False, (f"工具名 {spec.name!r} 与第一方工具冲突，自建技能不能覆盖它，请给技能改名。")
+
+
+def unregister(name: str) -> bool:
+    """从活着的注册表里注销一个【自建技能】工具（供 deactivate/delete 用），
+    让停用/删除在不重启进程的情况下即时生效。第一方工具拒绝注销。"""
+    spec = _SPECS.get(name)
+    if spec is None:
+        return False
+    if spec.origin == "builtin":
+        logger.warning("拒绝注销第一方工具：%r", name)
+        return False
+    del _SPECS[name]
+    try:
+        _ORDER.remove(name)
+    except ValueError:
+        pass
+    return True
 
 
 def tool(name: str, description: str, input_schema: Optional[dict] = None,

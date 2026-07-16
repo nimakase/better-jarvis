@@ -27,6 +27,7 @@ from typing import Optional
 from openai import AsyncOpenAI
 
 import config
+from core import registry
 
 # 工具生成的输出上限（token）。工具偏大时，重写整份文件的输出很容易在结尾 TOOL_DEF
 # 处被截断，丢掉收尾的 }，导致"'{' was never closed"这类永远修不好的语法错误。
@@ -318,11 +319,16 @@ def activate_skill(name: str) -> tuple[bool, str]:
         if not handler:
             return False, f"代码中找不到函数 {tool_def['name']}()"
 
-        register_tool(tool_def, handler)
+        # 用 register_skill_tool（origin=skill，允许替换自己之前的注册）——
+        # 这样"编辑工具→重新激活"能在不重启进程的情况下即时刷新 schema/handler。
+        ok, rmsg = registry.register_skill_tool(tool_def, handler)
+        if not ok:
+            return False, rmsg
 
-        # 更新 meta
+        # 更新 meta（记下实际注册的工具名，供 deactivate/delete 精确注销）
         meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
         meta["status"] = "active"
+        meta["tool_name"] = tool_def["name"]
         meta["activated_at"] = datetime.now(timezone.utc).isoformat()
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -333,7 +339,7 @@ def activate_skill(name: str) -> tuple[bool, str]:
 
 
 def deactivate_skill(name: str) -> tuple[bool, str]:
-    """将技能标记为 inactive（不卸载当前进程，重启后不加载）。"""
+    """停用技能：标记 inactive，并【从活着的注册表里注销】，当前进程立即失效。"""
     try:
         meta_path = _skill_dir(name) / "meta.json"
     except ValueError as e:
@@ -343,7 +349,9 @@ def deactivate_skill(name: str) -> tuple[bool, str]:
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta["status"] = "inactive"
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    return True, f"技能 {name} 已停用（重启后生效）"
+    # 从运行中的注册表注销（用记录的实际工具名，回退目录名），无需重启即时生效
+    registry.unregister(meta.get("tool_name") or name)
+    return True, f"技能 {name} 已停用（当前进程已即时生效）"
 
 
 def load_all_active_skills():
@@ -531,7 +539,7 @@ async def list_tools_meta() -> str:
 
 
 def delete_skill(name: str) -> tuple[bool, str]:
-    """删除一个工具（包括代码和元数据）。"""
+    """删除一个工具（代码 + 元数据），并【从活着的注册表里注销】，当前进程立即失效。"""
     import shutil as _shutil
     try:
         d = _skill_dir(name)
@@ -539,8 +547,18 @@ def delete_skill(name: str) -> tuple[bool, str]:
         return False, str(e)
     if not d.exists():
         return False, f"工具 {name} 不存在"
+    # 先按记录的实际工具名从运行中的注册表注销（回退目录名），再删文件——
+    # 否则进程里仍留着旧注册，"删了重建"也逃不出旧登记。
+    tool_name = name
+    meta_path = d / "meta.json"
+    if meta_path.exists():
+        try:
+            tool_name = json.loads(meta_path.read_text(encoding="utf-8")).get("tool_name") or name
+        except Exception:
+            pass
+    registry.unregister(tool_name)
     _shutil.rmtree(d)
-    return True, f"工具 {name} 已删除"
+    return True, f"工具 {name} 已删除（当前进程已即时注销）"
 
 
 async def cleanup_drafts(confirm_delete: list = None) -> str:
@@ -637,6 +655,22 @@ META_TOOL_DEFS = [
             "type": "object",
             "properties": {"name": {"type": "string", "description": "工具名"}},
             "required": ["name"]
+        }
+    },
+    {
+        "name": "update_tool_code",
+        "description": (
+            "把你写好的【确切代码】原样写入某工具（不让模型改写/重生成）。"
+            "当你已经手写好完整 tool.py、只想原样保存时用它——而不是 create_tool/edit_tool"
+            "（那两个会让模型重新生成，代码会变样）。写入后是 draft，需再 activate_tool 激活。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "工具名（snake_case）"},
+                "code": {"type": "string", "description": "完整的 tool.py 源码（含 async 主函数 + TOOL_DEF）"},
+            },
+            "required": ["name", "code"]
         }
     },
     {
@@ -804,6 +838,35 @@ async def _handle_activate_tool(name: str) -> str:
     ok, msg = activate_skill(name)
     return ("✅ " if ok else "❌ ") + msg
 
+async def _handle_update_tool_code(name: str, code: str) -> str:
+    """把【确切代码】原样写入某工具（不经模型改写/重生成）。用于"我已写好完整
+    tool.py、只想原样保存"的场景——避免 create_tool/edit_tool 让模型重写成别的样子。"""
+    if not is_safe_name(name):
+        return f"工具名非法：{name!r}"
+    code = _strip_markdown_fence((code or "").strip())
+    if not code:
+        return "没有收到代码内容。"
+    validation = validate_tool_code(code)
+    d = _skill_dir(name)
+    d.mkdir(exist_ok=True)
+    (d / "tool.py").write_text(code, encoding="utf-8")
+    # 保留原 description / created_at（若有）
+    meta_path = d / "meta.json"
+    orig = read_skill_meta(name) or {}
+    meta = {
+        "status": "draft",
+        "description": orig.get("description", "") or "（手动写入的代码）",
+        "created_at": orig.get("created_at", datetime.now(timezone.utc).isoformat()),
+        "last_edited_at": datetime.now(timezone.utc).isoformat(),
+        "last_change": "manual update_tool_code",
+        "validation": validation,
+    }
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    message = f"工具 {name} 的代码已按你给的原样写入（未经模型改写），审查后回复「激活 {name}」生效。"
+    return ToolResult(text=message + "\n\n" + validation_summary(validation), actions=[Action("code_review", {
+        "name": name, "code": code, "validation": validation, "message": message,
+    })])
+
 async def _handle_review_tool(name: str) -> str:
     """随时把某个工具的代码 + 校验结果重新调出来审查（网页重弹审查卡片，
     飞书重发代码卡片）。解决"审查窗口滚走后再也调不出来"。"""
@@ -871,6 +934,7 @@ META_HANDLERS = {
     "list_tools_meta":  _handle_list_tools_meta,
     "read_tool_code":   _handle_read_tool_code,
     "review_tool":      _handle_review_tool,
+    "update_tool_code": _handle_update_tool_code,
     "activate_tool":    _handle_activate_tool,
     "delete_tool":      _handle_delete_tool,
     "cleanup_drafts":   _handle_cleanup_drafts,
@@ -890,6 +954,7 @@ _META_GROUPS = {
     "create_tool": "authoring", "edit_tool": "authoring", "delete_tool": "authoring",
     "cleanup_drafts": "authoring", "list_tools_meta": "authoring",
     "read_tool_code": "authoring", "review_tool": "authoring", "activate_tool": "authoring",
+    "update_tool_code": "authoring",
     "create_schedule": "scheduling", "list_schedules": "scheduling",
     "delete_schedule": "scheduling", "pause_schedule": "scheduling", "resume_schedule": "scheduling",
     "send_file_to_chat": "fileio",
