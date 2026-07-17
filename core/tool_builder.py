@@ -33,6 +33,8 @@ from core import registry
 # 处被截断，丢掉收尾的 }，导致"'{' was never closed"这类永远修不好的语法错误。
 # 给足预算 + 截断检测（见 _call_codegen）从根上避免。可用 env 覆盖。
 _TOOL_GEN_MAX_TOKENS = int(os.environ.get("JARVIS_TOOL_GEN_MAX_TOKENS", "16000"))
+# 造工具的"生成→验证→按真实报错改"有界循环的最大轮数（三期）。可 env 覆盖。
+_TOOL_AUTHOR_MAX_ATTEMPTS = int(os.environ.get("JARVIS_TOOL_AUTHOR_MAX_ATTEMPTS", "3"))
 from core.controller import register_tool
 from core.safety import safe_name, is_safe_name
 from core.results import ToolResult, Action
@@ -258,22 +260,6 @@ async def _call_codegen(user_content: str, max_tokens: int = None) -> str:
     )
 
 
-async def _generate_code(
-    tool_name: str, user_request: str,
-    prior_code: str = "", prior_errors: list = None,
-) -> str:
-    """生成工具代码。若传入 prior_code + prior_errors，则是"带错重生成"：
-    把上一版代码和阻断级错误一并喂回模型，让它修好再交（提升生成稳定性）。"""
-    user_content = f"工具名：{tool_name}\n需求：{user_request}"
-    if prior_code and prior_errors:
-        user_content += (
-            "\n\n上一版代码没通过静态校验，请修复以下【阻断级错误】后重出完整代码：\n"
-            + "\n".join(f"- {e}" for e in prior_errors)
-            + f"\n\n上一版代码：\n{prior_code}"
-        )
-    return await _call_codegen(user_content)
-
-
 def validation_summary(v: dict) -> str:
     """把校验结果渲染成人/模型可读的一段文字（供 read/review/飞书卡片复用）。"""
     if not v:
@@ -495,6 +481,73 @@ def update_skill_code(name: str, new_code: str) -> tuple[bool, str]:
     return True, f"代码已更新，请重新激活 {name} 使改动生效"
 
 
+# ── 造工具的有界自我修正循环（三期：生成→验证门→按真实报错改）────────────────
+
+def _write_draft(name: str, code: str, description: str, extra_meta: dict = None) -> tuple[Path, dict]:
+    """写草稿 tool.py + meta（保留原 created_at/description），返回 (path, validation)。"""
+    d = _skill_dir(name)
+    d.mkdir(exist_ok=True)
+    tool_path = d / "tool.py"
+    tool_path.write_text(code, encoding="utf-8")
+    validation = validate_tool_code(code)
+    prev = read_skill_meta(name) or {}
+    meta = {
+        "status": "draft",
+        "description": description or prev.get("description", "") or "",
+        "created_at": prev.get("created_at", datetime.now(timezone.utc).isoformat()),
+        "validation": validation,
+    }
+    if extra_meta:
+        meta.update(extra_meta)
+    (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return tool_path, validation
+
+
+async def _author_verified_loop(
+    name: str, base_content: str, description: str,
+    extra_meta: dict = None, max_attempts: int = None,
+) -> tuple[str, dict, bool, str, int]:
+    """有界的"生成→静态+一致性校验→隔离子进程 import 冒烟→把【真实报错】喂回重生成"循环。
+    只有全部门都过才停；用尽仍不过则返回最后一版 + 未过原因（诚实交付，不假装成功）。
+    返回 (code, validation, smoke_ok, smoke_msg, attempts)。"""
+    max_attempts = max_attempts or _TOOL_AUTHOR_MAX_ATTEMPTS
+    content = base_content
+    code, validation, smoke_ok, smoke_msg = "", {"ok": False, "errors": [], "warnings": []}, False, ""
+    for attempt in range(1, max_attempts + 1):
+        code = await _call_codegen(content)
+        tool_path, validation = _write_draft(name, code, description, extra_meta)
+        if not validation["ok"]:
+            content = base_content + (
+                "\n\n上一版没通过静态校验/一致性检查，请修复这些【阻断级错误】后重出完整代码"
+                "（尤其：不要调用 building block 上不存在的方法，严格按给你的真实 API）：\n"
+                + "\n".join(f"- {e}" for e in validation["errors"])
+                + f"\n\n上一版代码：\n{code}"
+            )
+            continue
+        smoke_ok, smoke_msg = smoke_import_skill(tool_path)
+        if smoke_ok:
+            return code, validation, True, "ok", attempt
+        content = base_content + (
+            f"\n\n上一版能过静态校验，但在隔离子进程 import/加载时失败：{smoke_msg}\n"
+            f"请修复后重出完整代码。\n\n上一版代码：\n{code}"
+        )
+    return code, validation, smoke_ok, smoke_msg, max_attempts
+
+
+def _authoring_message(name: str, verb: str, validation: dict, smoke_ok: bool,
+                       smoke_msg: str, attempts: int) -> str:
+    """据循环结果生成给用户的诚实说明。"""
+    if validation["ok"] and smoke_ok:
+        return (f"工具 {name} 代码已{verb}，并通过静态校验 + 一致性检查 + 隔离冒烟"
+                f"（共 {attempts} 轮），等待你审查并激活。")
+    if not validation["ok"]:
+        problem = "；".join(validation["errors"])
+        return (f"工具 {name} 我改了 {attempts} 遍，仍没通过校验：{problem}。"
+                f"可能是所需能力缺失或太复杂——你看下代码，或告诉我怎么调整。")
+    return (f"工具 {name} 静态校验过了，但隔离冒烟仍失败：{smoke_msg}（已试 {attempts} 轮）。"
+            f"很可能是依赖缺失或复用的接口对不上，你看下代码或告诉我怎么调整。")
+
+
 # ── 注册进主控的元工具 ────────────────────────────────────────────────────────
 
 async def create_tool(name: str, request: str) -> str:
@@ -511,19 +564,16 @@ async def create_tool(name: str, request: str) -> str:
         return f"工具 {name} 已存在。如需修改，请说「修改 {name} 工具」。"
 
     try:
-        # 生成 + 静态校验；若有【阻断级】错误，把错误喂回模型自动重生成 1 次，
-        # 尽量让到用户面前的草稿至少语法/结构过关（减少一上来就是坏代码）。
-        code = await _generate_code(name, request)
-        _, validation = save_skill_draft(name, code, request)
-        if not validation["ok"]:
-            code = await _generate_code(name, request, prior_code=code, prior_errors=validation["errors"])
-            _, validation = save_skill_draft(name, code, request)
-
-        note = "" if validation["ok"] else "（注意：静态校验仍未通过，见下方错误，可让我修）"
-        message = f"工具 {name} 代码已生成，等待你审查并激活。{note}"
+        # 有界自我修正循环：生成 → 静态+一致性校验 → 隔离子进程冒烟 → 把真实报错喂回改，
+        # 全部门过才停；用尽仍不过则诚实交付最后一版 + 未过原因（不假装成功）。
+        base = f"工具名：{name}\n需求：{request}"
+        code, validation, smoke_ok, smoke_msg, attempts = await _author_verified_loop(name, base, request)
+        message = _authoring_message(name, "生成", validation, smoke_ok, smoke_msg, attempts)
         return ToolResult(text=message + "\n\n" + validation_summary(validation), actions=[Action("code_review", {
             "name": name, "code": code, "validation": validation, "message": message,
         })])
+    except CodeGenTruncated as e:
+        return f"生成工具失败：{e}"
     except Exception as e:
         return f"生成工具失败：{e}"
 
@@ -540,44 +590,14 @@ async def edit_tool(name: str, change_request: str) -> str:
     if not existing:
         return f"工具 {name} 不存在，请先用 create_tool 创建。"
 
-    prompt = f"以下是现有工具代码：\n\n{existing}\n\n请根据要求修改：{change_request}\n\n只输出完整的新代码，不要说明。"
+    orig_description = (read_skill_meta(name) or {}).get("description", "") or change_request
+    base = f"以下是现有工具代码：\n\n{existing}\n\n请根据要求修改：{change_request}\n\n只输出完整的新代码，不要说明。"
     try:
-        # 生成（含截断检测/加预算重试）；若静态校验有【阻断级】错误，把错误喂回自动重生成 1 次
-        new_code = await _call_codegen(prompt)
-        validation = validate_tool_code(new_code)
-        if not validation["ok"]:
-            fix_prompt = (
-                prompt
-                + "\n\n上一版没通过静态校验，请修复以下【阻断级错误】后重出完整代码：\n"
-                + "\n".join(f"- {e}" for e in validation["errors"])
-                + f"\n\n上一版代码：\n{new_code}"
-            )
-            new_code = await _call_codegen(fix_prompt)
-            validation = validate_tool_code(new_code)
-
-        # 保留原始 description，不用 change_request 覆盖
-        d = _skill_dir(name)
-        meta_path = d / "meta.json"
-        orig_description = ""
-        if meta_path.exists():
-            try:
-                orig_description = json.loads(meta_path.read_text(encoding="utf-8")).get("description", "")
-            except Exception:
-                pass
-
-        d.mkdir(exist_ok=True)
-        (d / "tool.py").write_text(new_code, encoding="utf-8")
-        meta = {
-            "status": "draft",
-            "description": orig_description or change_request,
-            "created_at": json.loads(meta_path.read_text(encoding="utf-8")).get("created_at", datetime.now(timezone.utc).isoformat()) if meta_path.exists() else datetime.now(timezone.utc).isoformat(),
-            "last_edited_at": datetime.now(timezone.utc).isoformat(),
-            "last_change": change_request,
-            "validation": validation,
-        }
-        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        note = "" if validation["ok"] else "（注意：静态校验仍未通过，见下方错误，可让我继续修）"
-        message = f"工具 {name} 代码已修改，等待你审查并重新激活。{note}"
+        # 同一套有界自我修正循环（生成→静态+一致性→冒烟→按真实报错改）
+        extra = {"last_edited_at": datetime.now(timezone.utc).isoformat(), "last_change": change_request}
+        new_code, validation, smoke_ok, smoke_msg, attempts = await _author_verified_loop(
+            name, base, orig_description, extra_meta=extra)
+        message = _authoring_message(name, "修改", validation, smoke_ok, smoke_msg, attempts)
         return ToolResult(text=message + "\n\n" + validation_summary(validation), actions=[Action("code_review", {
             "name": name, "code": new_code, "validation": validation, "message": message,
         })])
