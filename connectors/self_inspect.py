@@ -99,6 +99,25 @@ async def list_self_modules() -> str:
 
 
 @tool(
+    "read_symbol",
+    "按【符号】读取某个第一方模块里的一个类/方法/函数/常量的源码片段（不是整文件，省 token）。"
+    "写新工具需要参考现有代码（如理解某个类怎么用、网页选择器长啥样）时用它，一次读一个符号。"
+    "name 支持 'ClassName' / 'ClassName.method' / '函数名' / '模块级常量名'。只读。",
+    {
+        "type": "object",
+        "properties": {
+            "module": {"type": "string", "description": "模块，如 prospecting.hubspot_worker"},
+            "name":   {"type": "string", "description": "符号名，如 HubSpotBrowser 或 HubSpotBrowser.rows 或 HUBSPOT_ROW_SELECTOR"},
+        },
+        "required": ["module", "name"],
+    },
+)
+async def read_symbol(module: str, name: str) -> str:
+    from core.source_read import read_symbol as _rs
+    return _rs(module, name)
+
+
+@tool(
     "read_self_source",
     "读取贾维斯自己某个源文件的完整源码，并在开头标注它属于核心还是周边、为什么。"
     "path 用相对仓库根的路径，如 'core/controller.py' 或 'ARCHITECTURE.md'。"

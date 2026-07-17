@@ -57,7 +57,9 @@
 | **API 一致性静态检查（抓臆造方法）** | ✅ 二期已实现 |
 | **子进程 import 冒烟门** | ✅ 二期已实现 |
 | **有界"生成→验证→按真实报错改"循环** | ✅ 三期已实现 |
-| **完整造工具子 agent（生成时读任意源码）** | 未来（可选） |
+| **符号级源码读取 `read_symbol`（省 token 基石）** | ✅ 已实现 |
+| **两趟参考注入（写前门控地读现有源码学真实用法/页面结构）** | ✅ 已实现 |
+| **完整造工具子 agent（多轮自主读任意源码 + 自纠）** | 未来（可选，循环骨架复用 controller，read_symbol 已就位） |
 
 唯一有分量的新工程是"**安全地跑一次冒烟测试**"：现在激活在主进程 `exec`，拿未验证的生成代码在主进程空跑有风险，
 必须放到**子进程**隔离跑。这是二期的重点。
@@ -94,9 +96,17 @@
   `_author_verified_loop`——生成 → 静态+一致性校验 → 隔离子进程 import 冒烟 → 失败把**真实报错**喂回重生成，
   最多 `_TOOL_AUTHOR_MAX_ATTEMPTS`（默认 3，env 可调）轮；全部门过才停，用尽仍不过则**诚实交付**最后一版 +
   未过原因（`_authoring_message`），绝不假装成功。到用户面前的草稿因此默认是"已通过校验+冒烟"的。
-- **未来（可选）**：更彻底的"**造工具子 agent**"，手握 `read_self_source` + 校验器 + 子进程冒烟测试，
-  在生成时自己去读它需要的任何 building block 源码（不止清单内），像开发者一样迭代。当前一~三期已覆盖
-  绝大多数失败模式；此项作为进一步增强。
+- **参考式造工具（两趟版）✅ 已实现（2026-07-16）**：`core/source_read.read_symbol(module, name)` 按
+  【符号】(Class / Class.method / 函数 / 模块常量) 返回源码片段（不是整文件，省 token）；也作为 `read_symbol`
+  工具暴露给 agent。`tool_builder._gather_references`：写代码前先用轻模型做一趟【门控】询问"要不要参考、参考
+  哪些符号"（自包含工具回 NONE 则零开销），把点名的**真实源码片段**注入生成提示词，再进三期的验证循环。
+  这样"参考现有代码理解真实用法/网页结构/选择器再写新代码"成立——例如写 HubSpot screener 时读
+  `HubSpotBrowser.rows` / `HUBSPOT_ROW_SELECTOR` / `.page` 用法，用 building block 暴露的 `.page`/`.rows()`
+  拼出 fetch-view，而无需给第一方加方法、也无需技能自己 import playwright。
+- **未来（可选）——完整 agentic 造工具子 agent**：把生成升级为复用 `JarvisController` 的受限工具循环，
+  工具集 = `read_symbol`/`read_self_source`/`search_repo` + `submit_tool_code`（内部跑 validate+冒烟，报错即
+  作为返回值让模型自纠），多轮自主读任意源码、自纠。token 经济性靠【符号级读取 + 上下文修剪 + 门控 + 硬预算】，
+  鲁棒性靠【轮数/预算/超时有界 + 优雅降级 + 只读工具面 + 子进程冒烟】。read_symbol 已是其基石。
 
 ## 6. 安全考量
 

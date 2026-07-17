@@ -41,7 +41,9 @@ from core.results import ToolResult, Action
 from core.skill_policy import (
     ALLOWED_IMPORTS, BLOCKED_IMPORTS, WARNING_PATTERNS, import_rules_text,
     is_reusable_import, building_blocks_api_text, check_building_block_usage,
+    BUILDING_BLOCKS,
 )
+from core.source_read import read_symbol as _read_symbol
 
 # ── 静态代码验证 ──────────────────────────────────────────────────────────────
 
@@ -481,6 +483,59 @@ def update_skill_code(name: str, new_code: str) -> tuple[bool, str]:
     return True, f"代码已更新，请重新激活 {name} 使改动生效"
 
 
+# ── 两趟参考注入：写代码前先读现有源码学真实用法/网页结构（省 token 的门控式做法）──
+
+_REFERENCE_MODULES = list(BUILDING_BLOCKS.keys())   # 允许被参考的第一方模块
+_MAX_REFERENCE_SYMBOLS = int(os.environ.get("JARVIS_TOOL_REF_MAX_SYMBOLS", "12"))
+
+
+async def _gather_references(task_desc: str) -> str:
+    """第一趟（便宜的轻模型调用，门控）：问模型"要不要参考现有代码、参考哪些符号"，
+    再用 read_symbol 把它点名的【真实源码片段】取回，拼成可注入生成提示词的参考块。
+    自包含工具会回 NONE → 返回空串，不产生任何额外 token 开销。失败一律优雅降级为空。"""
+    if not _REFERENCE_MODULES:
+        return ""
+    ask = (
+        f"你要写一个自建工具，任务：{task_desc}\n\n"
+        f"可参考的第一方模块（会把你点名的真实源码片段给你）：{', '.join(_REFERENCE_MODULES)}\n"
+        "如果写对它需要参考其中某些类/方法/常量（例如理解真实用法、网页结构、选择器），"
+        "就列出你要读的符号，每行一个，格式 `module:symbol`"
+        "（symbol 可为 ClassName、ClassName.method 或模块级常量名）。只读你真正需要的，别贪多。\n"
+        "若这个工具自包含、不需要参考任何第一方代码，只回复 NONE。"
+    )
+    try:
+        client = AsyncOpenAI(api_key=config.OPENROUTER_API_KEY, base_url=config.OPENROUTER_BASE_URL)
+        resp = await client.chat.completions.create(
+            model=config.CLAUDE_MODEL_LIGHT, max_tokens=400, timeout=30,
+            messages=[{"role": "user", "content": ask}],
+        )
+        text = (resp.choices[0].message.content or "").strip()
+    except Exception:
+        return ""   # 参考步骤绝不阻断造工具
+    if not text or "NONE" in text.upper().split():
+        return ""
+
+    blocks, seen = [], set()
+    for line in text.splitlines():
+        line = line.strip().lstrip("-*0123456789. ").strip().strip("`")
+        if ":" not in line:
+            continue
+        module, _, symbol = line.partition(":")
+        module, symbol = module.strip(), symbol.strip()
+        if module not in _REFERENCE_MODULES or not symbol or (module, symbol) in seen:
+            continue
+        seen.add((module, symbol))
+        blocks.append(_read_symbol(module, symbol))
+        if len(blocks) >= _MAX_REFERENCE_SYMBOLS:
+            break
+    if not blocks:
+        return ""
+    return (
+        "【参考：以下是你点名要读的第一方【真实源码片段】（权威——据此写对真实用法/选择器，"
+        "严格不要臆造没出现过的方法/属性）】\n\n" + "\n\n".join(blocks) + "\n\n"
+    )
+
+
 # ── 造工具的有界自我修正循环（三期：生成→验证门→按真实报错改）────────────────
 
 def _write_draft(name: str, code: str, description: str, extra_meta: dict = None) -> tuple[Path, dict]:
@@ -564,9 +619,10 @@ async def create_tool(name: str, request: str) -> str:
         return f"工具 {name} 已存在。如需修改，请说「修改 {name} 工具」。"
 
     try:
-        # 有界自我修正循环：生成 → 静态+一致性校验 → 隔离子进程冒烟 → 把真实报错喂回改，
-        # 全部门过才停；用尽仍不过则诚实交付最后一版 + 未过原因（不假装成功）。
-        base = f"工具名：{name}\n需求：{request}"
+        # 两趟：先（门控地）读现有源码学真实用法/网页结构，再进有界自我修正循环
+        # （生成 → 静态+一致性校验 → 隔离冒烟 → 把真实报错喂回改，全部门过才停）。
+        ref = await _gather_references(request)
+        base = ref + f"工具名：{name}\n需求：{request}"
         code, validation, smoke_ok, smoke_msg, attempts = await _author_verified_loop(name, base, request)
         message = _authoring_message(name, "生成", validation, smoke_ok, smoke_msg, attempts)
         return ToolResult(text=message + "\n\n" + validation_summary(validation), actions=[Action("code_review", {
@@ -591,9 +647,10 @@ async def edit_tool(name: str, change_request: str) -> str:
         return f"工具 {name} 不存在，请先用 create_tool 创建。"
 
     orig_description = (read_skill_meta(name) or {}).get("description", "") or change_request
-    base = f"以下是现有工具代码：\n\n{existing}\n\n请根据要求修改：{change_request}\n\n只输出完整的新代码，不要说明。"
     try:
-        # 同一套有界自我修正循环（生成→静态+一致性→冒烟→按真实报错改）
+        # 两趟：先门控地读参考源码，再进有界自我修正循环
+        ref = await _gather_references(f"修改工具 {name}：{change_request}")
+        base = ref + f"以下是现有工具代码：\n\n{existing}\n\n请根据要求修改：{change_request}\n\n只输出完整的新代码，不要说明。"
         extra = {"last_edited_at": datetime.now(timezone.utc).isoformat(), "last_change": change_request}
         new_code, validation, smoke_ok, smoke_msg, attempts = await _author_verified_loop(
             name, base, orig_description, extra_meta=extra)
