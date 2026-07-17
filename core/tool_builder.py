@@ -38,7 +38,7 @@ from core.safety import safe_name, is_safe_name
 from core.results import ToolResult, Action
 from core.skill_policy import (
     ALLOWED_IMPORTS, BLOCKED_IMPORTS, WARNING_PATTERNS, import_rules_text,
-    is_reusable_import, building_blocks_api_text,
+    is_reusable_import, building_blocks_api_text, check_building_block_usage,
 )
 
 # ── 静态代码验证 ──────────────────────────────────────────────────────────────
@@ -117,6 +117,10 @@ def validate_tool_code(code: str) -> dict:
     )
     if not has_async_func:
         errors.append("缺少 async 函数定义")
+
+    # 5. building block API 一致性（阻断级）：抓"在复用的 building block 上调用了不存在的
+    #    方法/属性"这类幻觉——import 对了、静态过、真跑才 AttributeError 的正是这类。
+    errors.extend(check_building_block_usage(code))
 
     return {
         "ok": len(errors) == 0,
@@ -307,6 +311,39 @@ def save_skill_draft(name: str, code: str, description: str) -> tuple[Path, dict
     return tool_path, validation
 
 
+_SMOKE_SCRIPT = (
+    "import importlib.util, sys\n"
+    "spec = importlib.util.spec_from_file_location('smoke_mod', sys.argv[1])\n"
+    "m = importlib.util.module_from_spec(spec)\n"
+    "spec.loader.exec_module(m)\n"          # import/加载阶段：捕获 ImportError、缺依赖、模块级崩溃
+    "td = getattr(m, 'TOOL_DEF', None)\n"
+    "assert isinstance(td, dict) and td.get('name'), 'TOOL_DEF 缺失或没有 name'\n"
+    "assert callable(getattr(m, td['name'], None)), 'handler 函数不存在或不可调用'\n"
+    "print('SMOKE_OK')\n"
+)
+
+
+def smoke_import_skill(tool_path: Path, timeout: int = 45) -> tuple[bool, str]:
+    """在【隔离子进程】里 import 该技能并断言 TOOL_DEF/handler 存在。
+    只做 import + 结构断言，【不执行 handler】(避免真实副作用)。用于激活前先在隔离环境
+    验证它至少能加载——而不是拿未验证代码直接在主进程 exec。返回 (ok, message)。"""
+    import subprocess
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c", _SMOKE_SCRIPT, str(tool_path)],
+            capture_output=True, text=True, timeout=timeout, env=os.environ.copy(),
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"冒烟测试超时（>{timeout}s，import 阶段卡住，可能有阻塞/死循环的模块级代码）"
+    except Exception as e:
+        return True, f"（冒烟测试无法运行，跳过：{type(e).__name__}: {e}）"  # 环境问题不阻断
+    if r.returncode == 0 and "SMOKE_OK" in r.stdout:
+        return True, "ok"
+    err = (r.stderr or r.stdout or "").strip()
+    last = err.splitlines()[-1] if err else "未知错误"
+    return False, f"冒烟测试未通过（隔离子进程里 import/加载失败）：{last}"
+
+
 def activate_skill(name: str) -> tuple[bool, str]:
     """激活一个 draft 技能：加载、注册、更新 meta。返回 (success, message)。"""
     try:
@@ -319,11 +356,16 @@ def activate_skill(name: str) -> tuple[bool, str]:
     if not tool_path.exists():
         return False, f"找不到技能文件：{tool_path}"
 
-    # 激活前重新验证（防止手动绕过）
+    # 激活前重新验证（防止手动绕过）：静态校验 + building block API 一致性
     code = tool_path.read_text(encoding="utf-8")
     v = validate_tool_code(code)
     if not v["ok"]:
         return False, "代码验证未通过：\n" + "\n".join(v["errors"])
+
+    # 运行时冒烟：先在隔离子进程里验证能 import/加载，再在主进程 exec+注册
+    ok_smoke, smoke_msg = smoke_import_skill(tool_path)
+    if not ok_smoke:
+        return False, smoke_msg
 
     try:
         spec = importlib.util.spec_from_file_location(f"skills.{name}", tool_path)

@@ -53,9 +53,10 @@
 | 配置对技能可见 | `config._export_env_for_skills()` 导出 os.environ（2026-07-16 已补） |
 | 存确切代码 | 元工具 `update_tool_code`（2026-07-16 已补） |
 | 截断防护 | `_call_codegen` 足额预算 + 截断检测重试（2026-07-16 已补） |
-| **建 building block 清单 / 注入真实 API** | **新增（一期）** |
-| **子进程冒烟测试门** | **新增（二期）** |
-| **agentic 写作循环 / 造工具子 agent** | **新增（三期）** |
+| **建 building block 清单 / 注入真实 API** | ✅ 一期已实现 |
+| **API 一致性静态检查（抓臆造方法）** | ✅ 二期已实现 |
+| **子进程 import 冒烟门** | ✅ 二期已实现 |
+| **agentic 写作循环 / 造工具子 agent** | 三期（待做） |
 
 唯一有分量的新工程是"**安全地跑一次冒烟测试**"：现在激活在主进程 `exec`，拿未验证的生成代码在主进程空跑有风险，
 必须放到**子进程**隔离跑。这是二期的重点。
@@ -75,7 +76,11 @@
 
 一期不改变"一次性生成"这一点，但通过**把真实 API 喂进提示词**，让单次生成也能写对复用代码——这是当前失败的主因。
 
-### 二期（关键）——运行时冒烟测试门
+### 二期（关键）——运行时验证门 ✅ 已实现（2026-07-16）
+
+实现落点：`skill_policy.check_building_block_usage`（AST 一致性检查，纳入 `validate_tool_code` 阻断级）
++ `tool_builder.smoke_import_skill`（`activate_skill` 激活前的子进程 import 冒烟）。以下为原始设计：
+
 
 - 新增在**子进程**里对草稿做冒烟测试：import 模块 → 断言 `TOOL_DEF` 结构与 handler 存在 →
   （可选）用代表性/mock 参数对 handler 做一次 dry-run，超时/异常/AttributeError 即判失败并带回真实报错。
