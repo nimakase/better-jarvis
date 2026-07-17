@@ -132,6 +132,106 @@ def building_blocks_api_text() -> str:
     return "\n\n".join(blocks) if blocks else "（当前无可复用 building block）"
 
 
+def _bb_class_apis() -> dict:
+    """从 building block 源码抽取每个类的【真实可用属性集】(方法 + self.x 实例属性 +
+    类级属性)，供一致性检查用。返回 {类名: {"attrs": set, "dynamic": bool}}。
+    dynamic=True(类定义了 __getattr__ 等) → 该类跳过检查(属性是动态的)。"""
+    import ast
+    from pathlib import Path
+    repo = Path(__file__).resolve().parent.parent
+    out: dict = {}
+    for mod, meta in BUILDING_BLOCKS.items():
+        path = repo / (mod.replace(".", "/") + ".py")
+        symbols = set(meta.get("symbols") or [])
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for node in tree.body:
+            if not (isinstance(node, ast.ClassDef) and node.name in symbols):
+                continue
+            attrs: set = set()
+            dynamic = False
+            for m in node.body:
+                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    attrs.add(m.name)
+                    if m.name in ("__getattr__", "__getattribute__"):
+                        dynamic = True
+                    for sub in ast.walk(m):
+                        tgts = []
+                        if isinstance(sub, ast.Assign):
+                            tgts = sub.targets
+                        elif isinstance(sub, ast.AnnAssign):
+                            tgts = [sub.target]
+                        for t in tgts:
+                            if (isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
+                                    and t.value.id == "self"):
+                                attrs.add(t.attr)
+                elif isinstance(m, ast.Assign):
+                    for t in m.targets:
+                        if isinstance(t, ast.Name):
+                            attrs.add(t.id)
+                elif isinstance(m, ast.AnnAssign) and isinstance(m.target, ast.Name):
+                    attrs.add(m.target.id)
+            out[node.name] = {"attrs": attrs, "dynamic": dynamic}
+    return out
+
+
+def check_building_block_usage(code: str) -> list[str]:
+    """静态检查：技能是否在复用的 building block 上调用了【不存在的方法/属性】(臆造)。
+    只对"直接 import 的 building block 类"和"由其构造器直接产生的变量"下判断，保守设计
+    以避免误报；命中即返回阻断级错误(附真实可用 API)。这是拦截"import 对了但方法是编的、
+    静态过校验、真跑才崩"这类幻觉的关键。"""
+    import ast
+    try:
+        tree = ast.parse(code)
+    except Exception:
+        return []   # 语法错误另有报错
+    apis = _bb_class_apis()
+    if not apis:
+        return []
+    bb_classes = set(apis)
+
+    # 1) 本文件 import 进来的 building block 类名(含别名)
+    imported: dict = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and is_reusable_import(node.module):
+            for a in node.names:
+                if a.name in bb_classes:
+                    imported[a.asname or a.name] = a.name
+    if not imported:
+        return []
+
+    # 2) var = ClassName(...) → var 是该类实例
+    var_class: dict = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            f = node.value.func
+            if isinstance(f, ast.Name) and f.id in imported:
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        var_class[t.id] = imported[f.id]
+
+    # 3) 扫所有 `base.attr`：base 是 building block 类名(ClassName.attr)或其实例(var.attr)
+    errors: list = []
+    seen: set = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)):
+            continue
+        base = node.value.id
+        cls = imported.get(base) or var_class.get(base)
+        if not cls or cls not in apis or apis[cls]["dynamic"]:
+            continue
+        if node.attr not in apis[cls]["attrs"] and (base, node.attr) not in seen:
+            seen.add((base, node.attr))
+            real = ", ".join(sorted(a for a in apis[cls]["attrs"] if not a.startswith("_"))) or "(无)"
+            errors.append(
+                f"`{cls}` 没有 `{node.attr}` 这个方法/属性（疑似臆造，会在运行时 AttributeError）。"
+                f"真实可用：{real}"
+            )
+    return errors
+
+
 def import_rules_text() -> str:
     """把导入策略渲染成喂给模型的提示词条目（与校验器同源）。"""
     allowed = ", ".join(sorted(ALLOWED_IMPORTS))
