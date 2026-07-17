@@ -49,11 +49,97 @@ WARNING_PATTERNS = [
 ]
 
 
+# ── 可复用的第一方 building block（允许技能 import；真实 API 注入生成提示词）──────
+#
+# 自建技能默认只能用标准库白名单 + 已装第三方包，禁止 import 内部模块。但有些第一方
+# 能力（如 HubSpot 浏览器自动化）本就是给技能复用的共享 building block。这里显式列出
+# 【允许复用】的模块 + 关键符号；校验器放行它们的 import，生成器则会拿到它们的【真实
+# 签名】（见 building_blocks_api_text），从而写对复用代码、不再臆造不存在的方法。
+#
+# 注意：列在这里 = 授予技能调用它的能力。只列确需被技能复用、且激活前会人工审代码的模块。
+BUILDING_BLOCKS: dict[str, dict] = {
+    "prospecting.login_manager": {
+        "desc": "HubSpot 登录会话管理（检查/维持登录，避免重复弹浏览器）",
+        "symbols": ["LoginManager"],
+    },
+    "prospecting.hubspot_worker": {
+        "desc": "HubSpot 浏览器自动化（驱动 HubSpot 网页）",
+        "symbols": ["HubSpotBrowser"],
+    },
+}
+
+
+def is_reusable_import(name: str) -> bool:
+    """该 import 名是否属于允许复用的第一方 building block。"""
+    if not name:
+        return False
+    for mod in BUILDING_BLOCKS:
+        if name == mod or name.startswith(mod + "."):
+            return True
+    return False
+
+
+def building_blocks_api_text() -> str:
+    """用 AST 从 building block 源码抽取【真实公共签名】（不含函数体），渲染成一段
+    权威 API 参考喂给生成器。让单次生成也能照真实接口写对复用代码。"""
+    import ast
+    from pathlib import Path
+    repo_root = Path(__file__).resolve().parent.parent
+
+    def fmt_args(a: "ast.arguments") -> str:
+        parts = [p.arg for p in (list(getattr(a, "posonlyargs", [])) + list(a.args))]
+        if a.vararg:
+            parts.append("*" + a.vararg.arg)
+        parts += [k.arg for k in a.kwonlyargs]
+        if a.kwarg:
+            parts.append("**" + a.kwarg.arg)
+        return ", ".join(parts)
+
+    def first_doc(node) -> str:
+        d = (ast.get_docstring(node) or "").strip()
+        return d.split("\n", 1)[0][:80]
+
+    blocks = []
+    for mod, meta in BUILDING_BLOCKS.items():
+        path = repo_root / (mod.replace(".", "/") + ".py")
+        symbols = set(meta.get("symbols") or [])
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        body = []
+        for node in tree.body:
+            if getattr(node, "name", None) not in symbols:
+                continue
+            if isinstance(node, ast.ClassDef):
+                body.append(f"class {node.name}:")
+                doc = first_doc(node)
+                if doc:
+                    body.append(f"    # {doc}")
+                for m in node.body:
+                    if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+                            not m.name.startswith("_") or m.name == "__init__"):
+                        kw = "async def" if isinstance(m, ast.AsyncFunctionDef) else "def"
+                        body.append(f"    {kw} {m.name}({fmt_args(m.args)})")
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                kw = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+                body.append(f"{kw} {node.name}({fmt_args(node.args)})")
+                doc = first_doc(node)
+                if doc:
+                    body.append(f"    # {doc}")
+        if body:
+            blocks.append(f"# {mod} — {meta.get('desc', '')}\n" + "\n".join(body))
+    return "\n\n".join(blocks) if blocks else "（当前无可复用 building block）"
+
+
 def import_rules_text() -> str:
     """把导入策略渲染成喂给模型的提示词条目（与校验器同源）。"""
     allowed = ", ".join(sorted(ALLOWED_IMPORTS))
     blocked = ", ".join(sorted(BLOCKED_IMPORTS))
+    bb = ", ".join(BUILDING_BLOCKS.keys())
     return (
         f"2. 只能 import 以下库（标准库也仅限这些，其余一律不要用）：{allowed}\n"
+        f"   另外【允许复用】这些第一方 building block（务必严格按下方【可复用 building block 的真实 API】"
+        f"给出的签名调用，绝不臆造别的方法/类）：{bb}\n"
         f"3. 禁止 import（会被校验器阻断、无法激活）：{blocked}"
     )
