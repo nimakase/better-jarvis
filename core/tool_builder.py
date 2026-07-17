@@ -36,7 +36,10 @@ _TOOL_GEN_MAX_TOKENS = int(os.environ.get("JARVIS_TOOL_GEN_MAX_TOKENS", "16000")
 from core.controller import register_tool
 from core.safety import safe_name, is_safe_name
 from core.results import ToolResult, Action
-from core.skill_policy import ALLOWED_IMPORTS, BLOCKED_IMPORTS, WARNING_PATTERNS, import_rules_text
+from core.skill_policy import (
+    ALLOWED_IMPORTS, BLOCKED_IMPORTS, WARNING_PATTERNS, import_rules_text,
+    is_reusable_import, building_blocks_api_text,
+)
 
 # ── 静态代码验证 ──────────────────────────────────────────────────────────────
 
@@ -73,6 +76,8 @@ def validate_tool_code(code: str) -> dict:
                 root = name.split(".")[0]
                 if root in BLOCKED_IMPORTS:
                     errors.append(f"禁止导入内部或危险模块：`{name}`")
+                elif is_reusable_import(name):
+                    pass  # 允许复用的第一方 building block（见 skill_policy.BUILDING_BLOCKS）
                 elif root == "os":
                     warnings.append("导入了 `os` 模块，注意避免调用系统命令或删除文件")
                 elif root == "sys":
@@ -162,6 +167,15 @@ __IMPORT_RULES__
 - 需要存储文件时，存在 Path.home() / "jarvis_data" 下，不要存在项目目录里
 - os.path 相关操作优先改用 pathlib.Path 等价方法
 
+【能力边界（重要，避免臆造不存在的接口）】
+- 你【看不到】app 的其它内部模块源码（core / connectors / config / main），禁止 import 或臆造它们的 API。
+- 需要复用第一方能力时，【只能】用下面【可复用 building block 的真实 API】里列出的类/方法，且严格按给出的签名调用——不要臆造 `.create()`、`.fetch_xxx()` 这类没列出的方法。
+- 若某个所需能力在下面这些 building block 里【根本不存在】，不要编一个方法来假装能做：让工具直接返回一句明确说明（"该能力当前缺失，需要先给 <building block> 增补 <方法>"），然后停手。诚实报缺失，好过写一个跑起来就崩的工具。
+- LLM/密钥/模型从 os.environ 读（`OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` / `CLAUDE_MODEL` / `CLAUDE_MODEL_LIGHT`，app 已导出），用 `openai.AsyncOpenAI`；缺失就明确报错，不要硬编码模型名。
+
+【可复用 building block 的真实 API（权威——只能按这些签名调用）】
+__BUILDING_BLOCKS_API__
+
 【示例输出】
 """
 Tool: weather
@@ -190,8 +204,13 @@ TOOL_DEF = {
 }
 '''
 
-# 用单一事实来源（skill_policy）渲染导入规则，替换占位符，保证与校验器永不漂移
-CODE_GEN_PROMPT = CODE_GEN_PROMPT.replace("__IMPORT_RULES__", import_rules_text())
+# 用单一事实来源（skill_policy）渲染导入规则 + 可复用 building block 的真实 API，
+# 替换占位符，保证与校验器永不漂移、且模型拿到的是权威签名而非臆造。
+CODE_GEN_PROMPT = (
+    CODE_GEN_PROMPT
+    .replace("__IMPORT_RULES__", import_rules_text())
+    .replace("__BUILDING_BLOCKS_API__", building_blocks_api_text())
+)
 
 
 def _strip_markdown_fence(code: str) -> str:
