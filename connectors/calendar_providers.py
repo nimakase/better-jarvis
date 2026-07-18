@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, date
+from datetime import datetime
 
 from dateutil.parser import isoparse
 

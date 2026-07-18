@@ -10,7 +10,7 @@ import os
 import asyncio
 import logging
 from datetime import datetime
-from typing import AsyncGenerator, Callable
+from typing import AsyncGenerator
 
 # 工具调用轮次上限（防跑飞）。默认 30，大工程也够用；可用 env 调。
 # 配合下面的「重复无进展」检测：真正的死循环会被快速识别提前停，

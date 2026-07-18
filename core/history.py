@@ -16,7 +16,7 @@
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from core.memory import _get_conn  # 复用同一个 memory.db 与连接方式
 

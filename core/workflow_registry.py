@@ -23,7 +23,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Awaitable, Callable, Optional
+from typing import Callable, Optional
 
 from core import workflow as wf
 

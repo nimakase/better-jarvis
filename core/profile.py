@@ -12,7 +12,6 @@ MemGPT/Letta 式 "core memory" 的轻量单用户版：一小块【始终注入 
 """
 
 from datetime import datetime, timezone
-from typing import Optional
 
 from core.memory import _get_conn
 

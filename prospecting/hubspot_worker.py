@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import shutil
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -24,7 +23,6 @@ from playwright.sync_api import (
     Locator,
     Page,
     Playwright,
-    TimeoutError as PlaywrightTimeoutError,
     sync_playwright,
 )
 
