@@ -16,6 +16,7 @@
 """
 
 import ast
+import asyncio
 import importlib.util
 import json
 import os
@@ -41,7 +42,7 @@ from core.results import ToolResult, Action
 from core.skill_policy import (
     ALLOWED_IMPORTS, BLOCKED_IMPORTS, WARNING_PATTERNS, import_rules_text,
     is_reusable_import, building_blocks_api_text, check_building_block_usage,
-    BUILDING_BLOCKS,
+    check_runtime_contract, BUILDING_BLOCKS,
 )
 from core.source_read import read_symbol as _read_symbol
 
@@ -126,6 +127,14 @@ def validate_tool_code(code: str) -> dict:
     #    方法/属性"这类幻觉——import 对了、静态过、真跑才 AttributeError 的正是这类。
     errors.extend(check_building_block_usage(code))
 
+    # 6. 运行环境契约（阻断级）：抓"假设了自己不身处的环境"——典型是 input() 读 stdin。
+    #    这类调用能过语法、能过 import 冒烟（冒烟不执行 handler），只有真被调用时才
+    #    表现为「工具卡住不返回」，且用户在对话里看不到任何提示，排查成本极高。
+    errors.extend(check_runtime_contract(code))
+
+    # 7. SELFTEST 质量（阻断级）：声明了就必须真的断言点什么，空测试比没测试更糟。
+    errors.extend(check_selftest_quality(code))
+
     return {
         "ok": len(errors) == 0,
         "errors": errors,
@@ -174,6 +183,43 @@ __IMPORT_RULES__
 - 路径拼接用 Path / 运算符，不要用字符串加 / 或 \\
 - 需要存储文件时，存在 Path.home() / "jarvis_data" 下，不要存在项目目录里
 - os.path 相关操作优先改用 pathlib.Path 等价方法
+
+【运行环境契约（重要，决定工具能不能真的被用起来）】
+你写的工具运行在**贾维斯服务进程**里，由模型在对话中调用（网页 WebSocket 或飞书）。因此：
+- **没有终端**。禁止 `input()`、`getpass()` 等任何从 stdin 读取的调用——服务进程的 stdin 不是终端，
+  轻则 EOFError，重则永久挂起且无法中断。要用户做某件事，只能 **return 一句说明**让他去做，
+  或调用 building block 里【内部轮询等待】的方法（如 `login_bootstrap()`）。
+- **print 不会被用户看到**。`print`/`sys.stdout` 只进服务器日志。所有要给用户的信息，
+  一律通过**返回值字符串**传达。需要记录调试信息用 `logging`。
+- **不允许无上限阻塞**。任何等待（网络、浏览器、用户操作）都必须有超时上限；
+  `httpx`/`openai` 调用一律显式传 `timeout=`。长任务要能在上限内结束并如实汇报进度。
+- **有头浏览器弹在服务器那台机器上**，不是用户面前。若工具会弹窗，必须在返回值里说明这一点。
+
+【结果诚实性（重要，避免"看起来成功其实是错的"）】
+- 凡是"处理全部 / 遍历所有 / 批量"的工具，**必须如实报告实际覆盖范围**。分页列表只读到了第一页、
+  数量被上限截断、部分条目失败跳过——这些都要出现在返回值里（例如"共 500 条，本次覆盖前 50 条"）。
+  **静默截断是最严重的缺陷**：用户拿到一份看起来完整的结果，却无从发现它不完整。
+- 判定/分类类工具遇到"拿不准"，不要静默归入否定项。输出第三态（如 uncertain）让用户自己复核。
+- 抓不到数据时，要区分"确实是空"和"解析失败"，分别给不同的返回文案——
+  把解析失败报成"没有数据"会让人往完全错误的方向排查。
+
+【SELFTEST（可选，但解析/计算/转换类工具强烈建议写）】
+冒烟阶段【只 import 不执行 handler】，所以"能加载但结果是错的"这类缺陷平时抓不到。
+你可以额外定义一个模块级函数 `SELFTEST()`，它会在隔离子进程里【真的被执行】：
+
+def SELFTEST():
+    # 用内置的假数据跑纯逻辑，断言结果正确
+    assert _parse_size("1.5 KB") == 1536, _parse_size("1.5 KB")
+    assert _normalize("  A/B ") == "a-b"
+
+硬性要求：
+- 必须【只跑纯逻辑】：不联网、不开浏览器、不读写文件、不读环境变量、不调 LLM。
+  拿不到真实环境就构造最小假数据（假 HTML 片段、假 JSON、假行列表）。
+- 必须有真正会失败的 `assert`。**空测试比没有测试更糟**（制造"已验证"的错觉），
+  写不出有意义的断言就整个别写。
+- 要快（1 秒内）、无副作用、可重复运行。
+- 重点测那些【猜错了不会报错、只会悄悄算错】的地方：下标/偏移、边界与去重、
+  单位与进制换算、字段映射、分页或截断的终止条件。
 
 【能力边界（重要，避免臆造不存在的接口）】
 - 你【看不到】app 的其它内部模块源码（core / connectors / config / main），禁止 import 或臆造它们的 API。
@@ -299,6 +345,13 @@ def save_skill_draft(name: str, code: str, description: str) -> tuple[Path, dict
     return tool_path, validation
 
 
+# 冒烟脚本：import + 结构断言 + 【可选的 SELFTEST】。
+#
+# SELFTEST 的动机（2026-07-18）：此前冒烟【只 import 不执行 handler】（为避免真实副作用），
+# 于是"能加载但结果是错的"这类缺陷全部逃逸——oem_ems_screener 的列索引错位、静默只抓
+# 第一页都属此类，三道门全绿却全错。SELFTEST 给工具一个自证正确性的口子：
+# 用内置假数据跑纯逻辑，不碰网络/浏览器/文件，因此可以安全地在冒烟阶段【真的执行】。
+# 它是可选的，但一旦声明就必须通过，否则失败原因会被喂回生成循环重写。
 _SMOKE_SCRIPT = (
     "import importlib.util, sys\n"
     "spec = importlib.util.spec_from_file_location('smoke_mod', sys.argv[1])\n"
@@ -307,14 +360,47 @@ _SMOKE_SCRIPT = (
     "td = getattr(m, 'TOOL_DEF', None)\n"
     "assert isinstance(td, dict) and td.get('name'), 'TOOL_DEF 缺失或没有 name'\n"
     "assert callable(getattr(m, td['name'], None)), 'handler 函数不存在或不可调用'\n"
+    "st = getattr(m, 'SELFTEST', None)\n"
+    "if callable(st):\n"
+    "    import asyncio, inspect\n"
+    "    r = st()\n"
+    "    if inspect.isawaitable(r):\n"
+    "        r = asyncio.get_event_loop().run_until_complete(r)\n"
+    "    print('SELFTEST_RAN')\n"
     "print('SMOKE_OK')\n"
 )
 
 
+def check_selftest_quality(code: str) -> list:
+    """静态检查 SELFTEST 的质量：声明了就必须真的断言点什么。
+
+    防的是"空测试"——`def SELFTEST(): return True` 能过冒烟却什么也没验证，
+    比没有测试更糟（给人以已验证的错觉）。这与 self_iteration 用「先红后绿」
+    挡空测试是同一个思路的轻量版。返回阻断级错误列表。
+    """
+    import ast as _ast
+    try:
+        tree = _ast.parse(code)
+    except Exception:
+        return []
+    for node in tree.body:
+        if not (isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+                and node.name == "SELFTEST"):
+            continue
+        asserts = sum(1 for n in _ast.walk(node) if isinstance(n, _ast.Assert))
+        raises = sum(1 for n in _ast.walk(node)
+                     if isinstance(n, _ast.Raise))
+        if asserts + raises == 0:
+            return ["SELFTEST 里没有任何 assert / raise —— 空测试比没有测试更糟"
+                    "（会造成『已验证』的错觉）。要么写出真正能失败的断言，"
+                    "要么整个删掉 SELFTEST。"]
+        return []
+    return []
+
+
 def smoke_import_skill(tool_path: Path, timeout: int = 45) -> tuple[bool, str]:
-    """在【隔离子进程】里 import 该技能并断言 TOOL_DEF/handler 存在。
-    只做 import + 结构断言，【不执行 handler】(避免真实副作用)。用于激活前先在隔离环境
-    验证它至少能加载——而不是拿未验证代码直接在主进程 exec。返回 (ok, message)。"""
+    """在【隔离子进程】里 import 该技能、断言 TOOL_DEF/handler 存在，并执行可选的 SELFTEST。
+    handler 本身【仍不执行】（避免真实副作用）。返回 (ok, message)。"""
     import subprocess
     try:
         r = subprocess.run(
@@ -326,9 +412,12 @@ def smoke_import_skill(tool_path: Path, timeout: int = 45) -> tuple[bool, str]:
     except Exception as e:
         return True, f"（冒烟测试无法运行，跳过：{type(e).__name__}: {e}）"  # 环境问题不阻断
     if r.returncode == 0 and "SMOKE_OK" in r.stdout:
-        return True, "ok"
+        return True, "ok（含 SELFTEST）" if "SELFTEST_RAN" in r.stdout else "ok"
     err = (r.stderr or r.stdout or "").strip()
     last = err.splitlines()[-1] if err else "未知错误"
+    # 区分 import 失败与 SELFTEST 失败——两者的修法完全不同，报错必须说清是哪个
+    if "SELFTEST_RAN" in r.stdout or "SELFTEST" in err:
+        return False, f"SELFTEST 未通过（工具能加载，但自检断言失败——逻辑是错的）：{last}"
     return False, f"冒烟测试未通过（隔离子进程里 import/加载失败）：{last}"
 
 
@@ -483,6 +572,164 @@ def update_skill_code(name: str, new_code: str) -> tuple[bool, str]:
     return True, f"代码已更新，请重新激活 {name} 使改动生效"
 
 
+# ── 业务背景注入：造工具时也要知道「用户是谁、在做什么生意」──────────────────
+#
+# 动机（2026-07-18，oem_ems_screener 复盘）：此前造工具的提示词只有「工具名 + 需求」，
+# 用户档案一个字都进不去。于是模型写业务判定类工具时，只能从需求字面出发。
+# 实例：写「筛 OEM/EMS」的工具时，它问的是「这家公司是不是真制造商」——而用户做的是
+# ESO（呆滞料）交易，真正该问的是「它在供应链的哪一端：消耗元器件还是生产元器件」。
+# 后者需要知道用户靠什么赚钱才问得出来。档案里就写着，只是没送到。
+#
+# 安全面：档案本来每轮对话就注入 system prompt 发往同一个 OpenRouter，这里不新增
+# 暴露面。设 JARVIS_TOOL_AUTHOR_PROFILE=0 可关闭。
+_AUTHOR_USE_PROFILE = os.environ.get("JARVIS_TOOL_AUTHOR_PROFILE", "1") != "0"
+
+
+def _user_context_text() -> str:
+    """把用户档案渲染成一段「业务背景」注入造工具提示词。取不到一律降级为空串。"""
+    if not _AUTHOR_USE_PROFILE:
+        return ""
+    try:
+        from core import profile
+        block = profile.build_block()
+    except Exception:
+        return ""
+    if not block:
+        return ""
+    return (
+        "【用户背景（据此理解需求的真实意图，尤其是业务判据）】\n"
+        f"{block}\n\n"
+        "用法说明：\n"
+        "- 需求描述往往只写了「做什么」，没写「为什么」。写涉及业务判断的工具"
+        "（打分、分类、筛选、排序、话术）时，先想清楚用户拿这个结果去干什么，"
+        "据此确定判据；不要照着需求里的名词字面直译。\n"
+        "- 与本工具无关的个人条目（家人、日程偏好等）直接忽略，不要写进代码或提示词。\n"
+        "- 若你据此做了一个需求里没明说的业务假设，【必须】在工具的 docstring 里"
+        "写明这条假设，让用户能一眼看到并纠正。\n\n"
+    )
+
+
+# ── 需求澄清门：写代码前先问「不问就会写出静默错误」的那几个点 ─────────────────
+#
+# 动机（2026-07-18，oem_ems_screener 复盘）：那个工具返工的根因几乎全在需求层面，
+# 没有一条是代码 bug——
+#   · 原始需求写「max_companies 默认 0=全部」，"全部"这个词本身就假设了不分页，
+#     而目标视图有 532 条 / 22 页，于是工具静默只抓第一页
+#   · 需求说「判断是否 OEM/EMS」，但用户做 ESO 交易，真正的判据是供应链位置
+#     （消耗元器件 vs 生产元器件），照字面写出来的判据是错的
+# 这些问题问一句就能避免，模型却从来不问。
+#
+# 【设计上最大的风险是变成盘问】。造个小工具被追着问三轮，很快就没人用了。
+# 所以门槛定得很高：只问「不问就会产出静默错误结果」的点，最多 3 条，默认不问。
+# 关掉：JARVIS_TOOL_AUTHOR_CLARIFY=0
+_AUTHOR_CLARIFY = os.environ.get("JARVIS_TOOL_AUTHOR_CLARIFY", "1") != "0"
+_MAX_CLARIFY_QUESTIONS = 3
+
+_CLARIFY_PROMPT = """你要为用户写一个自建工具。在写代码【之前】，判断有没有【必须先问清楚】的点。
+
+工具名：{name}
+需求：{request}
+{context}
+【只问这四类】——它们的共同点是：猜错了不会报错，只会悄悄产出错的结果：
+1. 规模与分页：要处理的数据有多少条？来源会分页/滚动加载吗？"全部"到底是多少？
+   （典型事故：需求说"处理全部"，实际有几十页，工具只抓了第一页还宣称抓全了）
+2. 业务判据：需求里的分类/打分/筛选标准，按字面理解和按用户的实际用途理解是否一致？
+   用户拿这个结果去做什么决策？
+   （典型事故：需求说"筛出制造商"，用户其实要的是"会消耗某种物料的下游厂商"，
+     照字面写会把上游原厂错判进来）
+3. 关键取舍：有多种合理做法且结果差别大，选错要返工的地方。
+4. 失败处理：数据缺失/接口失效/权限不足时，应该报错停下、还是降级继续？
+
+【绝对不要问】：
+- 你自己能用合理默认值决定的（文件放哪、超时多少、并发数、输出格式细节）
+- 纯技术实现细节（用哪个库、函数怎么命名、要不要写日志）
+- 需求里已经写清楚的
+- 客套或确认性问题（"你是要我写一个 X 工具对吗"）
+
+判断标准：**如果这个问题猜错了，用户会拿到一份看起来正常、实际是错的结果吗？**
+是 → 值得问。否 → 不要问。
+
+多数工具【不需要】问任何问题。宁可不问也不要凑数。
+
+若无需提问，只回复 NONE。
+若确有必须问的，每行一个问题，最多 {maxq} 条，中文，每条一句话、具体可答，
+并在问题后用括号简述你打算采用的默认假设（这样用户不回也能继续）。"""
+
+
+async def _gather_clarifications(name: str, request: str) -> list:
+    """轻模型门控：返回必须先问用户的问题列表；无则空列表。失败一律降级为空
+    （澄清步骤绝不阻断造工具）。"""
+    if not _AUTHOR_CLARIFY:
+        return []
+    try:
+        client = AsyncOpenAI(api_key=config.OPENROUTER_API_KEY, base_url=config.OPENROUTER_BASE_URL)
+        resp = await client.chat.completions.create(
+            model=config.CLAUDE_MODEL_LIGHT, max_tokens=500, timeout=30,
+            messages=[{"role": "user", "content": _CLARIFY_PROMPT.format(
+                name=name, request=request, context=_user_context_text(),
+                maxq=_MAX_CLARIFY_QUESTIONS)}],
+        )
+        text = (resp.choices[0].message.content or "").strip()
+    except Exception:
+        return []
+    if not text or "NONE" in text.upper().split():
+        return []
+    out = []
+    for line in text.splitlines():
+        line = line.strip().lstrip("-*0123456789.、 ").strip()
+        if len(line) > 4:
+            out.append(line)
+        if len(out) >= _MAX_CLARIFY_QUESTIONS:
+            break
+    return out
+
+
+# ── 环境探针：写代码前先看一眼目标网页的真实结构 ──────────────────────────────
+#
+# 动机：抓取类工具最大的失败源是「代码和目标网页对不上」，而模型从没见过那个页面。
+# 实测（oem_ems_screener）：翻页选择器靠倒推猜，5 个候选只中 1 个，真正稳的那个
+# （button[data-next-page='true']）谁都没猜到。差别不在谁猜得准，在于能不能去看一眼。
+#
+# 门控设计（避免每次造工具都白开一次浏览器）：
+#   1. 需求里没有 http(s) URL → 直接跳过，零成本。绝大多数工具走这条。
+#   2. 有 URL → 才启动 headless 浏览器抽一份【结构摘要】注入提示词。
+# 只读：只导航 + 读 DOM，不点击不填表。URL 只取自用户的需求描述，不接受页面里发现的
+# URL（防注入）。失败一律降级为空串。关闭：JARVIS_TOOL_ENV_PROBE=0
+_AUTHOR_ENV_PROBE = os.environ.get("JARVIS_TOOL_ENV_PROBE", "1") != "0"
+
+
+async def _gather_env_probe(request: str) -> str:
+    """需求里带 URL 时，实地探一份目标页面结构摘要。无 URL / 失败均返回空串。"""
+    if not _AUTHOR_ENV_PROBE:
+        return ""
+    try:
+        from core import env_probe
+    except Exception:
+        return ""
+    urls = env_probe.extract_urls(request, limit=1)
+    if not urls:
+        return ""    # 绝大多数工具在这里零成本返回
+    url = urls[0]
+    # 复用 app 的浏览器 profile，这样已登录页面也看得到（与技能运行时同一份会话）
+    profile_dir = None
+    try:
+        profile_dir = config.DATA_DIR / "hubspot" / "chrome_profile"
+        if not profile_dir.exists():
+            profile_dir = None
+    except Exception:
+        pass
+    try:
+        digest = await asyncio.to_thread(env_probe.probe_page, url, profile_dir)
+    except Exception:
+        return ""
+    if not digest:
+        return ""
+    return (
+        "【目标页面的真实结构（探针实地抓取，权威——照这里的属性写选择器，"
+        "绝不要凭经验猜）】\n" + digest + "\n\n"
+    )
+
+
 # ── 两趟参考注入：写代码前先读现有源码学真实用法/网页结构（省 token 的门控式做法）──
 
 _REFERENCE_MODULES = list(BUILDING_BLOCKS.keys())   # 允许被参考的第一方模块
@@ -605,11 +852,13 @@ def _authoring_message(name: str, verb: str, validation: dict, smoke_ok: bool,
 
 # ── 注册进主控的元工具 ────────────────────────────────────────────────────────
 
-async def create_tool(name: str, request: str) -> str:
+async def create_tool(name: str, request: str, clarifications: str = "") -> str:
     """
     生成一个新工具并保存为草稿。
-    name:    工具名（snake_case，如 stock_price）
-    request: 对工具功能的详细描述
+    name:           工具名（snake_case，如 stock_price）
+    request:        对工具功能的详细描述
+    clarifications: 用户对澄清问题的回答（首次调用留空）。一旦非空即跳过澄清门，
+                    保证「问一轮就走」，不会反复追问。
     """
     if not is_safe_name(name):
         return f"工具名非法：{name!r}（只允许字母、数字、下划线、连字符，长度 1-64）"
@@ -618,11 +867,29 @@ async def create_tool(name: str, request: str) -> str:
     if existing:
         return f"工具 {name} 已存在。如需修改，请说「修改 {name} 工具」。"
 
+    # 澄清门：只在「猜错会产出静默错误结果」时拦一次。已带 clarifications 则直接放行，
+    # 因此最多问一轮，绝不会来回拉锯。
+    if not clarifications.strip():
+        questions = await _gather_clarifications(name, request)
+        if questions:
+            qs = "\n".join(f"{i}. {q}" for i, q in enumerate(questions, 1))
+            return (
+                f"在动手写 {name} 之前，有 {len(questions)} 个点需要你确认——"
+                f"这几处猜错了不会报错，只会让工具产出看起来正常、实际是错的结果：\n\n"
+                f"{qs}\n\n"
+                f"（请把用户的回答整理后，用同样的 name 和 request 再调一次 create_tool，"
+                f"并把回答放进 clarifications 参数；用户若说「你看着办」，"
+                f"就把括号里的默认假设作为回答传进去，不要再问第二轮。）"
+            )
+
     try:
         # 两趟：先（门控地）读现有源码学真实用法/网页结构，再进有界自我修正循环
         # （生成 → 静态+一致性校验 → 隔离冒烟 → 把真实报错喂回改，全部门过才停）。
         ref = await _gather_references(request)
-        base = ref + f"工具名：{name}\n需求：{request}"
+        env = await _gather_env_probe(request)
+        clar = (f"\n\n【用户对关键问题的确认（优先级高于上面的需求描述，"
+                f"如有冲突以此为准）】\n{clarifications.strip()}" if clarifications.strip() else "")
+        base = _user_context_text() + env + ref + f"工具名：{name}\n需求：{request}{clar}"
         code, validation, smoke_ok, smoke_msg, attempts = await _author_verified_loop(name, base, request)
         message = _authoring_message(name, "生成", validation, smoke_ok, smoke_msg, attempts)
         return ToolResult(text=message + "\n\n" + validation_summary(validation), actions=[Action("code_review", {
@@ -650,7 +917,10 @@ async def edit_tool(name: str, change_request: str) -> str:
     try:
         # 两趟：先门控地读参考源码，再进有界自我修正循环
         ref = await _gather_references(f"修改工具 {name}：{change_request}")
-        base = ref + f"以下是现有工具代码：\n\n{existing}\n\n请根据要求修改：{change_request}\n\n只输出完整的新代码，不要说明。"
+        env = await _gather_env_probe(change_request)
+        base = (_user_context_text() + env + ref
+                + f"以下是现有工具代码：\n\n{existing}\n\n请根据要求修改：{change_request}\n\n"
+                  f"只输出完整的新代码，不要说明。")
         extra = {"last_edited_at": datetime.now(timezone.utc).isoformat(), "last_change": change_request}
         new_code, validation, smoke_ok, smoke_msg, attempts = await _author_verified_loop(
             name, base, orig_description, extra_meta=extra)
@@ -747,6 +1017,14 @@ META_TOOL_DEFS = [
             "properties": {
                 "name":    {"type": "string", "description": "工具名，snake_case，如 stock_price、send_email"},
                 "request": {"type": "string", "description": "对工具功能的详细描述，越具体越好"},
+                "clarifications": {
+                    "type": "string",
+                    "description": (
+                        "用户对澄清问题的回答。【首次调用留空】；若本工具返回了需要确认的问题，"
+                        "就去问用户，然后把回答整理进这个参数、用同样的 name/request 再调一次。"
+                        "用户说「你看着办」时，把问题里括号内的默认假设作为回答填进来。"
+                    ),
+                },
             },
             "required": ["name", "request"]
         }
@@ -944,8 +1222,8 @@ async def _handle_send_file_to_chat(file_path: str, filename: str = "") -> str:
     )
 
 
-async def _handle_create_tool(name: str, request: str) -> str:
-    return await create_tool(name=name, request=request)
+async def _handle_create_tool(name: str, request: str, clarifications: str = "") -> str:
+    return await create_tool(name=name, request=request, clarifications=clarifications)
 
 async def _handle_edit_tool(name: str, change_request: str) -> str:
     return await edit_tool(name=name, change_request=change_request)

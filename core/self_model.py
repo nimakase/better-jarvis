@@ -39,6 +39,7 @@ PROTECTED: dict[str, str] = {
     "core/results.py":      "结构化返回与带外动作通道（脱敏边界）",
     "core/safety.py":       "路径/文件名防穿越（安全边界本身）",
     "core/tool_builder.py": "工具自建系统 + code_review 人工闸门（元能力）",
+    "core/env_probe.py": "造工具前的环境探针（驱动浏览器访问已登录页面，安全敏感）",
     "core/memory.py":       "Fernet 加密 KV 基础设施 + 密钥管理",
     "core/workflow.py":     "工作流引擎（轨道，不许改）",
     "core/scheduler.py":    "定时调度基础设施",

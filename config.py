@@ -149,6 +149,11 @@ def _export_env_for_skills() -> None:
         "OPENROUTER_BASE_URL": OPENROUTER_BASE_URL,
         "CLAUDE_MODEL":        CLAUDE_MODEL,
         "CLAUDE_MODEL_LIGHT":  CLAUDE_MODEL_LIGHT,
+        # 技能需要它才能定位到与 app 共用的运行态目录（如 HubSpot 浏览器 profile）。
+        # 不导出的话，技能只能用 Path(__file__)/../../.. 猜出仓库根，于是在仓库里另建一份
+        # chrome_profile —— 表现为「明明已经登录过 HubSpot，跑技能却还要再登一次」。
+        "JARVIS_DATA_DIR":     str(DATA_DIR),
+        "JARVIS_DOWNLOAD_DIR": str(DOWNLOAD_DIR),
     }.items():
         if v:
             os.environ[k] = v
