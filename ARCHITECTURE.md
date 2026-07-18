@@ -1,6 +1,36 @@
 # 贾维斯（Jarvis）架构文档
 
 > 个人 AI 助理 · 本地优先（local-first）· 可安装 Python 包
+> 更新日期：2026-07-18 · 本次改动：
+> · **造工具框架四期——从「能跑」到「跑得对」**（诊断见 `docs/tool_authoring_diagnosis.md`）。
+>   起因：自建的 `oem_ems_screener` 通过了全部三道门（静态校验 / API 一致性 / 子进程冒烟），
+>   真跑却列索引错位、静默只抓第一页、`input()` 卡死。根因是前三期只解决**存在性**问题
+>   （方法在不在、能不能 import），而这些缺陷全属**语义正确性**问题。三处改动：
+>   ① `skill_policy.BUILDING_BLOCKS` 注入面从「只给公共签名」扩为 **签名 + 常量取值 +
+>   显式暴露的私有复用方法 + 实例属性 + 语义约定(notes) + 可抄范例(recipes)**——此前
+>   `_extract_name`/`_column_idx` 这些**正确用法全是私有方法、被过滤掉了**，模型看不见自然只能自造；
+>   ② 新增 `check_runtime_contract` 阻断 `input`/`getpass`/`breakpoint`（技能跑在服务进程里没有终端），
+>   并在 `CODE_GEN_PROMPT` 加【运行环境契约】与【结果诚实性】两节（后者要求如实报告覆盖范围、
+>   判定类须有第三态——静默数据截断是最贵的缺陷）；
+>   ③ `config._export_env_for_skills` 增加 `JARVIS_DATA_DIR`/`JARVIS_DOWNLOAD_DIR`，
+>   技能不再靠猜仓库根定位运行态目录（此前会另建 chrome_profile → 登录态不共用）。
+> · **造工具补上两条「接触现实」的通道**——复盘发现它写不好工具主要不是不会写代码，
+>   而是①看不到目标环境 ②看不到执行结果 ③不会追问需求。本轮补了后者相关的两项：
+>   `_user_context_text()` 把**用户档案注入造工具提示词**（此前提示词只有「工具名+需求」，
+>   模型不知道用户做什么生意，只能照需求字面直译判据）；`_gather_clarifications()` 加了
+>   **需求澄清门**，写代码前只问「猜错会产出静默错误结果」的点（规模分页/业务判据/
+>   关键取舍/失败处理），并靠 `clarifications` 参数保证**只问一轮**、默认不问、
+>   每问必带默认假设。
+> · **补上另外两条通道**：`SELFTEST` 钩子——工具可选声明的自检函数，在隔离子进程里
+>   **真的执行**（此前冒烟只 import 不执行 handler，"能加载但结果是错的"全部逃逸）；
+>   `check_selftest_quality` 把「有 SELFTEST 却零断言」判为阻断级（空测试制造"已验证"的
+>   错觉，比没有更糟）。新增 `core/env_probe.py`（🔒 PROTECTED）——**环境探针**：
+>   需求里带 URL 时，造工具前先 headless 打开该页抽一份**结构摘要**（翻页控件真实属性、
+>   表头及定位属性、行骨架、页面自报总数）注入提示词；无 URL 则零成本跳过。只读、
+>   不点击不填表、URL 只取自用户需求（防注入）。实测其输出直接覆盖了本轮全部三个抓取
+>   类 bug 的成因。开关 `JARVIS_TOOL_AUTHOR_PROFILE` / `JARVIS_TOOL_AUTHOR_CLARIFY` /
+>   `JARVIS_TOOL_ENV_PROBE`。护栏由 `tests/test_skill_policy.py`（85 项断言）钉死。
+>
 > 更新日期：2026-07-16 · 本次改动（多批）：
 > · **自建工具读/审/激活闭环**——新增 `read_tool_code`/`review_tool`/`activate_tool` 三个元工具：模型可按名读自建工具源码（消除"我读不了 py"幻觉）、随时重弹审查、对话内直接激活草稿，飞书通道也能完整闭环（`lark_bridge` 的 `code_review` 改为真正下发代码卡片）；`create_tool` 静态校验有阻断级错误时自动喂回重生成一次。
 > · **文档读取本地优先 + 云端 OCR 兜底**——`read_document` 先本地读；扫描件（无文字层）按敏感度分流：非敏感→OpenRouter `file-parser`（mistral-ocr）云端 OCR、敏感→仅本机并诚实报错、存疑→先问用户（`cloud=allow/deny` 重调）。新增 `core/sensitivity.py`（硬规则+轻模型判定）与 `PDF_CLOUD_FALLBACK/ENGINE`、`SENSITIVITY_LLM` 开关；本地空提取一律明确报错，不再静默假成功。

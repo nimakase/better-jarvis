@@ -8,7 +8,8 @@
 |------|------|------|----------------|
 | `ARCHITECTURE.md` | 仓库根 | **架构唯一权威**：分层、模块职责、数据流、注册表家族 | 否（纯文档） |
 | `docs/SELF_MODEL.md` | docs/ | 代码边界（核心/周边）人类可读镜像 | 由 `core/self_model.py` 生成 |
-| `分发与部署.md` | 仓库根 | 分发方式与配置总览 | 否 |
+| `docs/tool_authoring_redesign.md` | docs/ | 造工具框架重设计方案（一~三期） | 否 |
+| `docs/tool_authoring_diagnosis.md` | docs/ | 造工具能力诊断（oem_ems_screener 复盘）+ 四期改动 | 否 |
 | `deploy/README.md` | deploy/ | Cloudflare 隧道配置单一事实源 | 否 |
 | `内置日历设计.md` | 仓库根 | 内置日历设计（进行中） | `core/calendar.py` 注释引用 |
 

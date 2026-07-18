@@ -35,3 +35,8 @@ better jarvis/
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 浏览器 profile。正确位置在 DATA_DIR/hubspot/chrome_profile（与 app 共用登录态），
+# 仓库里出现这个目录说明某个技能又把 base_dir 猜成了仓库根（见 skill_policy 的
+# 「profile 目录 · 必读」约定）。忽略它，同时它出现本身就是个信号。
+chrome_profile/
