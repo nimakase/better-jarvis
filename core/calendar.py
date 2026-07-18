@@ -167,7 +167,6 @@ def _parse_byday(token: str):
     """'MO' / '-1FR' / '2MO' → dateutil weekday（可带序号）。"""
     token = token.strip().upper()
     # 拆出可选的前导序号（含负号）
-    i = 0
     if token and (token[0] in "+-" or token[0].isdigit()):
         j = 1 if token[0] in "+-" else 0
         while j < len(token) and token[j].isdigit():

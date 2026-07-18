@@ -1209,7 +1209,6 @@ META_TOOL_DEFS = [
 ]
 
 async def _handle_send_file_to_chat(file_path: str, filename: str = "") -> str:
-    import json as _json
     from pathlib import Path as _Path
     fp = _Path(file_path)
     if not fp.exists():

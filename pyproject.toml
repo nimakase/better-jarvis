@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarvis"
-version = "0.1.0"
+version = "1.0.0"
 description = "贾维斯 —— 本地优先的个人 AI 助理（FastAPI + WebSocket + OpenRouter）"
 readme = "ARCHITECTURE.md"
 requires-python = ">=3.10"

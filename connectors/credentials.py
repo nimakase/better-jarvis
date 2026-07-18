@@ -7,8 +7,6 @@
     加密库后，经 WebSocket 侧信道直接推到浏览器，永不进入对话历史 / 云端。
 """
 
-import json
-from pathlib import Path
 
 from functools import partial
 from core.registry import tool as _tool
@@ -61,7 +59,6 @@ def ingest_image(image_path: str, alias: str, cred_type: str = "auto", note: str
             "raw_lines": parsed.get("raw_lines", []),
         }
     vault.save(alias, parsed["cred_type"], fields, expires_at=parsed["expiry"], note=note)
-    summary = vault.get_meta(alias)
     preview = {k: vault.mask_value(k, v) for k, v in fields.items() if k != "_raw_lines"}
     return {
         "ok": True,

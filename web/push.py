@@ -12,7 +12,6 @@ Web Push —— OS 级通知推送。
 import base64
 import json
 import logging
-from pathlib import Path
 
 from fastapi import APIRouter, Body
 from fastapi.responses import JSONResponse
