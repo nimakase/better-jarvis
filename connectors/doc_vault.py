@@ -12,6 +12,7 @@
 import json
 import re
 from functools import partial
+from typing import Optional
 
 import config
 from core.registry import tool as _tool
@@ -51,19 +52,23 @@ def _extract_text(path: str) -> str:
 
 
 def _parse_json(s: str) -> dict:
-    """从模型输出里抠出 JSON（容忍 ```json 包裹 / 前后噪声）。"""
-    s = s.strip()
-    s = re.sub(r"^```(?:json)?\s*|\s*```$", "", s).strip()
-    try:
-        return json.loads(s)
-    except Exception:
-        m = re.search(r"\{.*\}", s, re.S)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except Exception:
-                return {}
-        return {}
+    """从模型输出里抠出 JSON（容忍 ```json 包裹 / 前后噪声 / 截断）。
+    统一走 core.json_salvage（此前是朴素 `\\{.*\\}` 正则，截断即整体丢）。"""
+    from core.json_salvage import salvage_json_objects
+    objs = salvage_json_objects(s or "")
+    return objs[0] if objs else {}
+
+
+# 文档提取的结构化 schema（instructor 装了才据此校验+重试；没装此类不被使用）
+try:
+    from pydantic import BaseModel
+
+    class _DocExtract(BaseModel):
+        doc_type: str = "other"
+        fields: dict = {}
+        expires_at: Optional[str] = None
+except Exception:      # pydantic 理论上必装（config 依赖它）；兜底防御
+    _DocExtract = None
 
 
 async def extract_summary(path: str, doc_type: str = "auto") -> dict:
@@ -89,7 +94,8 @@ async def extract_summary(path: str, doc_type: str = "auto") -> dict:
         "只输出 JSON，不要任何解释文字。"
     )
 
-    client = AsyncOpenAI(api_key=config.OPENROUTER_API_KEY, base_url=config.OPENROUTER_BASE_URL)
+    from core.llm import get_client
+    client = get_client()   # 有界超时（core/llm 单一构建点）
 
     if is_image:
         import base64
@@ -110,15 +116,23 @@ async def extract_summary(path: str, doc_type: str = "auto") -> dict:
         raw_excerpt = text[:1500]
         content = instruction + "\n\n文档内容：\n" + snippet
 
-    try:
-        resp = await client.chat.completions.create(
-            model=config.CLAUDE_MODEL,
-            max_tokens=1500,
-            messages=[{"role": "user", "content": content}],
-        )
-        parsed = _parse_json(resp.choices[0].message.content or "")
-    except Exception as e:
-        return {"ok": False, "message": f"提取失败：{e}"}
+    if is_image:
+        # 图片走视觉提取（content 是多模态数组）——保持原直调 + 抢救解析
+        try:
+            resp = await client.chat.completions.create(
+                model=config.CLAUDE_MODEL, max_tokens=1500,
+                messages=[{"role": "user", "content": content}])
+            parsed = _parse_json(resp.choices[0].message.content or "")
+        except Exception as e:
+            return {"ok": False, "message": f"提取失败：{e}"}
+    else:
+        # 文本走 core.structured：装了 instructor 则按 schema 校验+重试，
+        # 没装则自动退回（= 现有 _parse_json 抢救），行为不变、装了才升级。
+        from core import structured
+        parsed = await structured.extract(content, _DocExtract,
+                                          fallback_parser=_parse_json, max_retries=2)
+        if not parsed:
+            return {"ok": False, "message": "提取失败：模型未产出可解析结果"}
 
     fields = parsed.get("fields") or {}
     if not isinstance(fields, dict):

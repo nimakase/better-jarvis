@@ -29,6 +29,8 @@ class ToolSpec:
     handler: Callable
     group: str = "general"   # 领域分组，为将来 controller 渐进披露铺路（默认 general）
     origin: str = "builtin"  # "builtin"=第一方(连接器/元工具) | "skill"=运行时自建技能
+    effect: str = ""         # 动作效应等级（见 core/effects.LEVELS）；空=未声明，
+                             # 由 effects.effect_of() 按内置表/默认值兜底
 
 
 # 注册表：name -> ToolSpec；_order 保留注册顺序（影响呈现给模型的顺序）
@@ -110,7 +112,7 @@ def unregister(name: str) -> bool:
 
 
 def tool(name: str, description: str, input_schema: Optional[dict] = None,
-         group: str = "general"):
+         group: str = "general", effect: str = ""):
     """装饰器：把一个（async）函数声明为工具并注册。
 
     用法：
@@ -119,6 +121,8 @@ def tool(name: str, description: str, input_schema: Optional[dict] = None,
 
     group：领域分组（如 "signal_intel"），默认 "general"。仅作元数据，
     不改变现有披露行为；为将来按组渐进披露铺路。
+    effect：动作效应等级（core/effects.LEVELS 之一）。空=未声明，
+    由 effects 模块的内置表/默认值兜底。新工具建议显式声明。
     """
     def deco(fn: Callable) -> Callable:
         register_spec(ToolSpec(
@@ -127,6 +131,7 @@ def tool(name: str, description: str, input_schema: Optional[dict] = None,
             input_schema=input_schema or dict(_EMPTY_SCHEMA),
             handler=fn,
             group=group,
+            effect=effect,
         ))
         return fn
     return deco

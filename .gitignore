@@ -17,8 +17,12 @@ venv/
 *.db-wal
 *.db-shm
 *.db-journal
-# 运行时数据目录（潜客树、临时文件等，不入库）
-data/
+# 运行时数据目录（inbox/results/archive、临时文件等，不入库）
+data/*
+# 例外：潜客树是【人工策划的资产】（12 赛道 × 64 产品类目 + HS 码 + signal_sectors 映射），
+# 不是运行时垃圾——必须入库，否则重新 clone 就没了、潜客工作流第一步就挂。
+# 注意 status 字段会被 mark_node_done 就地改写，所以它的 diff 里会有推进痕迹，属正常。
+!data/prospect_tree.json
 
 # 用户生成的技能和定时任务（包含用户特定配置）
 skills/

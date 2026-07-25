@@ -1266,6 +1266,9 @@ function connect() {
 
     } else if (msg.type === "credential_reveal") {
       addCredentialRevealCard(msg.alias, msg.type_label, msg.values);
+
+    } else if (msg.type === "interactive") {
+      addInteractiveCard(msg);
     }
   };
 }
@@ -2234,6 +2237,70 @@ function addFileDownloadCard(filename, url, size) {
     </a>`;
   messagesEl.appendChild(wrap);
   scrollToBottom();
+}
+
+// ── 可交互卡片（按钮 / 表单）──────────────────────────────────────────────
+// 点击按钮 / 提交表单 = 把对应 intent 当作用户输入发送（与飞书回调等价）。
+function sendIntent(intent) {
+  if (!intent) return;
+  addUserMessage(intent);
+  wsSend({ message: intent });
+}
+
+function addInteractiveCard(msg) {
+  const wrap = document.createElement("div");
+  wrap.className = "message assistant";
+  const text = escHtml(msg.text || "");
+  let inner = `<div class="bubble">${text}</div>`;
+
+  if (msg.mode === "form") {
+    const fid = "form-" + Math.random().toString(36).slice(2, 8);
+    const fieldsHtml = (msg.fields || []).map(f => {
+      const label = escHtml(f.label || f.name);
+      if (f.type === "select") {
+        const opts = (f.options || []).map(o =>
+          `<option value="${escHtml(o.value || o.label)}">${escHtml(o.label || o.value)}</option>`).join("");
+        return `<label style="display:block;margin:6px 0 2px;font-size:13px">${label}</label>
+                <select data-name="${escHtml(f.name)}" style="width:100%;padding:6px;border-radius:8px;border:1px solid var(--border)">${opts}</select>`;
+      }
+      const tag = f.type === "textarea" ? "textarea" : "input";
+      return `<label style="display:block;margin:6px 0 2px;font-size:13px">${label}</label>
+              <${tag} data-name="${escHtml(f.name)}" placeholder="${escHtml(f.placeholder || "")}"
+                style="width:100%;padding:6px;border-radius:8px;border:1px solid var(--border)"></${tag}>`;
+    }).join("");
+    inner += `<div id="${fid}" class="interactive-form" style="margin-top:8px">
+      ${fieldsHtml}
+      <button class="btn-primary" style="margin-top:10px;padding:6px 14px;border-radius:8px;cursor:pointer"
+        onclick="submitInteractiveForm('${fid}', ${JSON.stringify(msg.submit_intent || "提交表单").replace(/"/g,'&quot;')})">
+        ${escHtml(msg.submit_label || "提交")}</button></div>`;
+  } else {
+    const btns = (msg.options || []).map(o => {
+      const intent = (o.intent || o.label || "").replace(/"/g, "&quot;");
+      const style = o.style === "primary" ? "background:var(--accent);color:#fff"
+                  : o.style === "danger" ? "background:#ef4444;color:#fff" : "";
+      return `<button onclick="sendIntent(&quot;${intent}&quot;)"
+        style="margin:4px 6px 0 0;padding:6px 14px;border-radius:8px;border:1px solid var(--border);cursor:pointer;${style}">
+        ${escHtml(o.label || "")}</button>`;
+    }).join("");
+    inner += `<div style="margin-top:6px">${btns}</div>`;
+  }
+
+  wrap.innerHTML = `<div class="avatar">J</div><div style="flex:1">${inner}</div>`;
+  messagesEl.appendChild(wrap);
+  scrollToBottom();
+}
+
+function submitInteractiveForm(fid, submitIntent) {
+  const root = document.getElementById(fid);
+  if (!root) return;
+  const pairs = [];
+  root.querySelectorAll("[data-name]").forEach(el => {
+    const name = el.getAttribute("data-name");
+    if (el.value) pairs.push(`${name}=${el.value}`);
+  });
+  const intent = submitIntent + (pairs.length ? `（表单内容：${pairs.join("；")}）` : "");
+  root.querySelectorAll("button").forEach(b => b.disabled = true);
+  sendIntent(intent);
 }
 
 async function activateTool(name) {

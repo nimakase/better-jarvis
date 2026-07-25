@@ -89,6 +89,36 @@ p, why = deliv.is_paused("prospect")
 check("track pause still works", p and "手动停" in why)
 check("other track unaffected", not deliv.is_paused("report")[0])
 
+# ── 8. 附件路由：新式渠道收到文件，老式渠道零改动 ──
+# 定时任务的产出文件（潜客 xlsx）靠这条路主动到飞书；webpush 这类老式
+# (title, content) 渠道对附件不可见、也绝不能因此报错。
+deliv.resume_track("prospect")
+seen = {"old": None, "new": None, "kw": None}
+def ch_old(title, content):                      # 老式：webpush 形态
+    seen["old"] = (title, content)
+def ch_new(title, content, attachments):         # 新式：飞书形态（位置参数）
+    seen["new"] = attachments
+def ch_kw(title, content, attachments=None):     # 新式：关键字缺省形态
+    seen["kw"] = attachments
+
+res8 = deliv.deliver("prospect", "标题", "正文", attachments=["/tmp/a.xlsx"],
+                     channels={"webpush": ch_old, "lark": ch_new, "kw": ch_kw},
+                     routing={"normal": ["webpush", "lark", "kw"]})
+check("老式渠道照常收到文字且不因附件报错",
+      seen["old"] == ("标题", "正文") and res8["sent"]["webpush"]["ok"])
+check("新式渠道（位置参数）收到附件列表", seen["new"] == ["/tmp/a.xlsx"])
+check("新式渠道（attachments 关键字）收到附件列表", seen["kw"] == ["/tmp/a.xlsx"])
+
+seen["new"] = "untouched"
+deliv.deliver("prospect", "t", "c",
+              channels={"lark": ch_new}, routing={"normal": ["lark"]})
+check("无附件时新式渠道按老式两参调用（不传 None 占位）", seen["new"] == "untouched")
+
+check("lark 已进默认严重度路由", "lark" in deliv.SEVERITY_CHANNELS["normal"]
+      and "lark" in deliv.SEVERITY_CHANNELS["high"])
+res9 = deliv.deliver("prospect", "t", "c")
+check("lark 未注册时只记 missing 不报错", "lark" in res9["missing_channels"])
+
 import shutil; shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))
 sys.exit(1 if fails else 0)

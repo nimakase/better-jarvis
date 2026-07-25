@@ -73,16 +73,26 @@ def validate_tool_code(code: str) -> dict:
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
+                # import a.b → 判 "a.b"
+                names = [(alias.name, alias.name) for alias in node.names]
             else:
-                names = [node.module] if node.module else []
+                # from a import b → 判 "a"，但白名单额外看 "a.b"：
+                # `from core import results` 与 `from core.results import X` 是同一件事，
+                # 只按 module("core") 判会把前者误拦。
+                mod = node.module or ""
+                names = [(mod, f"{mod}.{alias.name}" if mod else alias.name)
+                         for alias in node.names] if mod else []
 
-            for name in names:
+            for name, full in names:
                 root = name.split(".")[0]
-                if root in BLOCKED_IMPORTS:
-                    errors.append(f"禁止导入内部或危险模块：`{name}`")
-                elif is_reusable_import(name):
+                # building block 白名单【先于】根黑名单：黑名单按根模块粗粒度拦
+                # （core/connectors 整包），但个别子模块（如 core.results——工具
+                # 返回文件/动作的法定接口）是显式授权给技能复用的。顺序反了会导致
+                # 白名单形同虚设：core.* 永远到不了 is_reusable_import 那一行。
+                if is_reusable_import(name) or is_reusable_import(full):
                     pass  # 允许复用的第一方 building block（见 skill_policy.BUILDING_BLOCKS）
+                elif root in BLOCKED_IMPORTS:
+                    errors.append(f"禁止导入内部或危险模块：`{name}`")
                 elif root == "os":
                     warnings.append("导入了 `os` 模块，注意避免调用系统命令或删除文件")
                 elif root == "sys":
@@ -285,7 +295,8 @@ async def _call_codegen(user_content: str, max_tokens: int = None) -> str:
     自动加倍预算重试一次；仍截断则抛 CodeGenTruncated，交由上层给出清晰报错，
     绝不把半截坏代码当成结果保存。"""
     base = max_tokens or _TOOL_GEN_MAX_TOKENS
-    client = AsyncOpenAI(api_key=config.OPENROUTER_API_KEY, base_url=config.OPENROUTER_BASE_URL)
+    from core.llm import get_client
+    client = get_client(timeout=300)   # codegen 出整文件，给长超时（core/llm 单一构建点）
     last_mt = base
     for mt in (base, base * 2):
         last_mt = mt
@@ -463,17 +474,42 @@ def activate_skill(name: str) -> tuple[bool, str]:
         if not ok:
             return False, rmsg
 
-        # 更新 meta（记下实际注册的工具名，供 deactivate/delete 精确注销）
+        # 更新 meta（记下实际注册的工具名，供 deactivate/delete 精确注销）。
+        # 生命周期：draft → trial（首次激活，试用期）→ active（用户确认保留，keep_skill）。
+        # 已是 active 的（编辑后重激活）保持 active，不降级。
         meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
-        meta["status"] = "active"
+        was_active = meta.get("status") == "active"
+        meta["status"] = "active" if was_active else "trial"
         meta["tool_name"] = tool_def["name"]
         meta["activated_at"] = datetime.now(timezone.utc).isoformat()
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        return True, f"工具 {tool_def['name']} 已激活"
+        if was_active:
+            return True, f"工具 {tool_def['name']} 已重新激活"
+        return True, (f"工具 {tool_def['name']} 已激活（试用期）。可直接使用；"
+                      f"用户说「留下/就它了」再转正（keep_tool），说「放弃」则删除并清点其产物。")
 
     except Exception as e:
         return False, f"加载失败：{type(e).__name__}: {e}"
+
+
+def keep_skill(name: str) -> tuple[bool, str]:
+    """把试用中的技能转正（trial → active）。用户说「留下/就它了」时调。"""
+    try:
+        meta_path = _skill_dir(name) / "meta.json"
+    except ValueError as e:
+        return False, str(e)
+    if not meta_path.exists():
+        return False, "技能不存在"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if meta.get("status") == "active":
+        return True, f"技能 {name} 本就是正式状态"
+    if meta.get("status") != "trial":
+        return False, f"技能 {name} 当前是 {meta.get('status')!r}，只有试用中(trial)的能转正"
+    meta["status"] = "active"
+    meta["kept_at"] = datetime.now(timezone.utc).isoformat()
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return True, f"技能 {name} 已转正保留"
 
 
 def deactivate_skill(name: str) -> tuple[bool, str]:
@@ -507,7 +543,7 @@ def load_all_active_skills():
         except Exception as e:
             print(f"[tool_builder] 跳过技能 {skill_dir.name}：meta.json 解析失败（{e}）")
             continue
-        if meta.get("status") == "active":
+        if meta.get("status") in ("active", "trial"):
             ok, msg = activate_skill(skill_dir.name)
             if not ok:
                 print(f"[tool_builder] 加载技能 {skill_dir.name} 失败：{msg}")
@@ -662,7 +698,8 @@ async def _gather_clarifications(name: str, request: str) -> list:
     if not _AUTHOR_CLARIFY:
         return []
     try:
-        client = AsyncOpenAI(api_key=config.OPENROUTER_API_KEY, base_url=config.OPENROUTER_BASE_URL)
+        from core.llm import get_client
+        client = get_client()   # 轻调用，默认有界超时（core/llm 单一构建点）
         resp = await client.chat.completions.create(
             model=config.CLAUDE_MODEL_LIGHT, max_tokens=500, timeout=30,
             messages=[{"role": "user", "content": _CLARIFY_PROMPT.format(
@@ -751,7 +788,8 @@ async def _gather_references(task_desc: str) -> str:
         "若这个工具自包含、不需要参考任何第一方代码，只回复 NONE。"
     )
     try:
-        client = AsyncOpenAI(api_key=config.OPENROUTER_API_KEY, base_url=config.OPENROUTER_BASE_URL)
+        from core.llm import get_client
+        client = get_client()   # 轻调用，默认有界超时（core/llm 单一构建点）
         resp = await client.chat.completions.create(
             model=config.CLAUDE_MODEL_LIGHT, max_tokens=400, timeout=30,
             messages=[{"role": "user", "content": ask}],
@@ -867,6 +905,17 @@ async def create_tool(name: str, request: str, clarifications: str = "") -> str:
     if existing:
         return f"工具 {name} 已存在。如需修改，请说「修改 {name} 工具」。"
 
+    # 先查后建闸（core/capability）：与已有能力高度重合时拦下，要求显式说明差异。
+    # clarifications 非空（第二趟，已带回答/差异说明）则放行——最多拦一次，不拉锯。
+    if not clarifications.strip():
+        try:
+            from core import capability as _capability
+            dup_note = _capability.check_duplicate(request)
+        except Exception:
+            dup_note = None   # 查重失败绝不阻断造工具
+        if dup_note:
+            return dup_note
+
     # 澄清门：只在「猜错会产出静默错误结果」时拦一次。已带 clarifications 则直接放行，
     # 因此最多问一轮，绝不会来回拉锯。
     if not clarifications.strip():
@@ -966,7 +1015,19 @@ def delete_skill(name: str) -> tuple[bool, str]:
             pass
     registry.unregister(tool_name)
     _shutil.rmtree(d)
-    return True, f"工具 {name} 已删除（当前进程已即时注销）"
+    # 清点该工具名下的产物（登记表），绝不擅自删——删/留由用户拍板。
+    orphan_note = ""
+    try:
+        from core import artifacts as _artifacts
+        items = _artifacts.list_artifacts(producer=f"skill:{name}", limit=1000)
+        if items:
+            total_mb = sum(a.get("size") or 0 for a in items) / 1e6
+            orphan_note = (f"\n注意：它名下还有 {len(items)} 个产物（约 {total_mb:.1f} MB）"
+                           f"仍在图书馆/登记表里。请问用户这些产出【删还是留】；"
+                           f"删则调 purge_artifacts(producer='skill:{name}')。")
+    except Exception:
+        pass
+    return True, f"工具 {name} 已删除（当前进程已即时注销）{orphan_note}"
 
 
 async def cleanup_drafts(confirm_delete: list = None) -> str:

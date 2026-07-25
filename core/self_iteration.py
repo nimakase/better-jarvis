@@ -125,6 +125,19 @@ class SelfIterator:
         if not target.exists():
             return Outcome("failed", rel, "目标文件不存在")
 
+        # 护栏 0（和解闸 ㉕）：目标文件有【未提交】改动——那是别人的手（Ned/外部
+        # 工具）正在动它。快照-回滚机制建立在「只有我在动」的假设上，此时写入
+        # 会误伤外部改动，一律让路转人工。git 不可用时本检查安静跳过（如测试临时目录）。
+        try:
+            from core import drift as _drift
+            dirty = _drift.workdir_dirty(paths=[rel], repo=self.repo)
+        except Exception:
+            dirty = []
+        if dirty:
+            return Outcome("needs_human", rel,
+                           "工作树有未提交改动（可能是外部手正在改），自动迭代让路",
+                           ", ".join(dirty))
+
         test_path = self._test_path_for(prop)
         # 护栏 2：自动测试只能落在 tests/、且必须是 test_auto_ 前缀（绝不碰既有测试）
         if test_path.parent.resolve() != self.tests_dir.resolve():

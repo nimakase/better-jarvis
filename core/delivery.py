@@ -22,13 +22,18 @@ try:
 except Exception:
     _STATE_PATH = Path(__file__).resolve().parent / "delivery_state.json"
 
-# 严重度 → 默认渠道（可被 deliver() 的 routing 参数覆盖）
+# 严重度 → 默认渠道（可被 deliver() 的 routing 参数覆盖）。
+# lark 未注册时（没配凭据）只是记进 missing_channels，不报错——webpush 照发。
 SEVERITY_CHANNELS = {
-    "normal": ["webpush"],  # 日常交付（日报就绪、清单就绪）
-    "high":   ["webpush"],  # 高级别（登录过期、改版、配置错）
+    "normal": ["webpush", "lark"],  # 日常交付（日报就绪、清单就绪）
+    "high":   ["webpush", "lark"],  # 高级别（登录过期、改版、配置错）
 }
 
-ChannelFn = Callable[[str, str], object]  # (title, content) -> 任意
+# 渠道函数两种形态并存：
+#   老式 (title, content)                    —— 只发文字（webpush）
+#   新式 (title, content, attachments=None)  —— 还能带文件（lark）
+# deliver() 按签名自动适配，老渠道零改动。
+ChannelFn = Callable[..., object]
 
 
 # ────────────────────────── 状态读写 ──────────────────────────
@@ -170,16 +175,35 @@ def register_channel(name: str, fn: ChannelFn) -> None:
 
 # ────────────────────────── 投递主入口 ──────────────────────────
 
+def _accepts_attachments(fn) -> bool:
+    """渠道函数是否接收第三个 attachments 参数（新式渠道）。判不出来按老式算。"""
+    import inspect
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    if "attachments" in params:
+        return True
+    positional = [p for p in params.values()
+                  if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+    return len(positional) >= 3
+
+
 def deliver(track: str, title: str, content: str, severity: str = "normal",
             routing: Optional[dict] = None, channels: Optional[dict] = None,
+            attachments: Optional[list] = None,
             as_of: Optional[str] = None, state_path: str | Path = _STATE_PATH) -> dict:
     """过闸门 → 按严重度路由 → 调各渠道发送。
 
-    channels: {name: fn} 覆盖默认注册表（测试可注入 mock）。
-    routing:  {severity: [channel...]} 覆盖默认 SEVERITY_CHANNELS。
+    channels:    {name: fn} 覆盖默认注册表（测试可注入 mock）。
+    routing:     {severity: [channel...]} 覆盖默认 SEVERITY_CHANNELS。
+    attachments: 产出文件路径列表（如潜客 xlsx）。只有新式渠道（签名带
+                 attachments，如飞书）会收到并真实发文件；老式渠道（webpush）
+                 只发文字，附件对它们不可见——定时任务的文件因此能主动到飞书。
     """
     paused, reason = is_paused(track, as_of=as_of, state_path=state_path)
     if paused:
+        _record_receipt(track, title, False, {"_paused": {"ok": False, "error": reason}})
         return {"delivered": False, "reason": reason, "track": track}
 
     table = routing or SEVERITY_CHANNELS
@@ -191,10 +215,27 @@ def deliver(track: str, title: str, content: str, severity: str = "normal",
         fn = ch.get(name)
         if fn is None:
             missing.append(name)
+            sent[name] = {"ok": False, "error": "渠道未注册"}
             continue
         try:
-            sent[name] = {"ok": True, "result": fn(title, content)}
+            if attachments and _accepts_attachments(fn):
+                result = fn(title, content, attachments)
+            else:
+                result = fn(title, content)
+            sent[name] = {"ok": True, "result": result}
         except Exception as exc:
             sent[name] = {"ok": False, "error": str(exc)}
-    return {"delivered": True, "track": track, "severity": severity,
+    # ㉔ 诚实的 delivered：至少一个渠道真的发出去了才算送达（此前恒 True，
+    # 掩盖了「渠道全没注册/全失败」的静默失败）。回执落盘，可查、可被健康感官发现。
+    delivered = any(v.get("ok") for v in sent.values())
+    _record_receipt(track, title, delivered, sent)
+    return {"delivered": delivered, "track": track, "severity": severity,
             "sent": sent, "missing_channels": missing}
+
+
+def _record_receipt(track: str, title: str, delivered: bool, channels: dict) -> None:
+    try:
+        from core import telemetry
+        telemetry.record_delivery(track, title, delivered, channels)
+    except Exception:
+        pass

@@ -17,7 +17,7 @@ from typing import AsyncGenerator
 # 所以把绝对上限放宽是安全的——不会因为任务大就误伤。
 _MAX_TOOL_ROUNDS = int(os.environ.get("JARVIS_MAX_TOOL_ROUNDS", "30"))
 # 连续多少轮"调用完全相同的工具+参数"判定为卡循环，提前停。
-_TOOL_STALL_LIMIT = int(os.environ.get("JARVIS_TOOL_STALL_LIMIT", "3"))
+_TOOL_STALL_LIMIT = int(os.environ.get("JARVIS_TOOL_STALL_LIMIT", "4"))
 # 单次模型调用超时（秒）。关键：SDK 默认高达 600s，一次卡住就会静默长挂、
 # 灯不黄也没回复。给个有界值，超时即报错而非无限等。
 _LLM_TIMEOUT = float(os.environ.get("JARVIS_LLM_TIMEOUT", "120"))
@@ -28,9 +28,15 @@ _COMPRESS_INPUT_CAP = int(os.environ.get("JARVIS_COMPRESS_INPUT_CAP", "12000"))
 
 from openai import AsyncOpenAI
 
+import time as _time
+
 import config
+from core import effects as _effects
 from core import profile
 from core import registry
+from core import signals as _signals
+from core import telemetry as _telemetry
+from core import trust as _trust
 from core import reports as _reports
 from core import workflow_registry as _workflows
 from core import calendar as _calendar
@@ -259,13 +265,41 @@ def _normalize_result(raw) -> ToolResult:
     return raw if isinstance(raw, ToolResult) else ToolResult(text=str(raw))
 
 
-async def _execute_tool(name: str, inputs: dict) -> ToolResult:
+async def _forced_text_summary(client, system: str, messages: list) -> str:
+    """最终必答保证：工具跑完但模型交了白卷（最终文本为空）时，强制补一次
+    纯文本总结——这次调用不带 tools，模型只能说话。失败返回空串（不拖垮回合）。
+
+    背景（2026-07-22 实测）：多轮工具消息后部分模型会以空 content 收尾，
+    传输层只能显示「处理完成，无文本输出」。这不该发生——结果都在工具消息里，
+    差的只是让模型把它讲出来。"""
+    try:
+        resp = await client.chat.completions.create(
+            model=config.CLAUDE_MODEL,
+            max_tokens=config.MAX_TOKENS_RESPONSE,
+            messages=[{"role": "system", "content": system}] + messages + [{
+                "role": "user",
+                "content": "（系统提示：你刚执行了工具但没输出任何文字。"
+                           "请基于上面的工具结果，用中文把结论/现状直接总结给用户；"
+                           "若工具报了错，说明是什么错、你判断的原因和建议。）",
+            }],
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception:
+        return ""
+
+
+async def _execute_tool(name: str, inputs: dict, session: str = "interactive") -> ToolResult:
     handler = registry.get_handler(name)
     if handler is not None:
+        # 遥测（core/telemetry）：记录成败与耗时，喂 self_review/能力画像。绝不阻断。
+        t0 = _time.perf_counter()
+        ok, err = True, ""
         try:
             raw = await _safe_call(handler, **inputs)
         except Exception as e:
+            ok, err = False, f"{type(e).__name__}: {e}"
             raw = f"工具 {name} 执行出错：{e}"
+        _telemetry.record(name, ok, int((_time.perf_counter() - t0) * 1000), err, session)
         return _normalize_result(raw)
 
     return ToolResult(text=f"未知工具：{name}")
@@ -285,12 +319,23 @@ BACKGROUND_BLOCKED_TOOLS = {
 # ── 主控对话循环 ──────────────────────────────────────────────────────────────
 
 class JarvisController:
-    def __init__(self, interactive: bool = True):
-        self.client = AsyncOpenAI(
-            api_key=config.OPENROUTER_API_KEY,
-            base_url=config.OPENROUTER_BASE_URL,
-            timeout=_LLM_TIMEOUT,   # 有界超时，杜绝 SDK 默认 600s 的静默长挂
-        )
+    def __init__(self, interactive: bool = True,
+                 allowed_tools: "set[str] | None" = None,
+                 max_tool_rounds: "int | None" = None,
+                 channel: str = "",
+                 model: str = ""):
+        from core.llm import get_client
+        self.client = get_client(timeout=_LLM_TIMEOUT)   # 单一构建点见 core/llm
+        # 工具白名单（⑧，spawn 子 agent 用）：None=不启用（历史行为）；
+        # 集合=只允许这些工具（暴露与执行双层过滤，fail-safe）。
+        self.allowed_tools = allowed_tools
+        # 轮次预算（⑨）：None=全局默认 _MAX_TOOL_ROUNDS。
+        self.max_tool_rounds = max_tool_rounds
+        # 渠道感知（㉒）：传输层设置（web/chat→"web"，lark_bridge→"lark"）；
+        # 非交互实例默认 background。见 core/channels。
+        self.channel = channel or ("" if interactive else "background")
+        # 实例级模型覆盖（子 agent 可跑便宜模型）；空 = 全局 CLAUDE_MODEL。
+        self.model = model or config.CLAUDE_MODEL
         self.messages: list[dict] = []
         self.pending_actions: list = []
         # 渐进披露：本会话已激活的领域分组（核心工具始终可见，与此无关）。
@@ -298,11 +343,17 @@ class JarvisController:
         # interactive=True 是真人面对面的对话实例；后台/工作流/定时跑的设 False，
         # 届时屏蔽 BACKGROUND_BLOCKED_TOOLS（不写用户个人记忆、不自建工具/调度）。
         self.interactive = interactive
+        # 不可逆动作确认闸（core/effects）：机械拦截，逻辑全在 effects 模块。
+        self.confirm_gate = _effects.ConfirmGate()
+        # 污染闸（core/trust）：本回合读过外部不可信内容 → 禁对外动作（防注入）。
+        self.taint = _trust.TaintTracker()
 
     def reset_session(self):
         self.messages = []
         self.pending_actions = []
         self.active_groups = set()
+        self.confirm_gate = _effects.ConfirmGate()
+        self.taint = _trust.TaintTracker()
 
     def drain_actions(self) -> list:
         """取出并清空本轮累积的带外动作（供传输层 main.py 处理）。"""
@@ -365,16 +416,22 @@ class JarvisController:
         """
         blocked = set() if self.interactive else BACKGROUND_BLOCKED_TOOLS
 
+        def _permitted(name: str) -> bool:
+            """黑名单（后台）+ 白名单（spawn 子 agent，⑧）双层过滤。"""
+            if name in blocked:
+                return False
+            return self.allowed_tools is None or name in self.allowed_tools
+
         if not config.PROGRESSIVE_TOOLS:
             return [_to_openai_tool(d) for d in registry.definitions()
-                    if d["name"] not in blocked]
+                    if _permitted(d["name"])]
 
         core = set(config.CORE_TOOL_NAMES)
         name_to_group = {n: g for g, names in registry.groups().items() for n in names}
         exposed = [
             _to_openai_tool(d)
             for d in registry.definitions()
-            if d["name"] not in blocked
+            if _permitted(d["name"])
             and (d["name"] in core or name_to_group.get(d["name"]) in self.active_groups)
         ]
         exposed.append(_to_openai_tool(self._build_load_tools_def()))
@@ -389,14 +446,40 @@ class JarvisController:
           - {"type": "tool", "name": "..."}  调用某工具的进度提示（传输层可低调渲染）
         """
         self.pending_actions = []
+        # 确认闸：新用户回合到来——上轮被拦的不可逆调用晋级为「可执行」（一次性），
+        # 更早的过期作废。见 core/effects.ConfirmGate。
+        self.confirm_gate.new_user_turn()
+        # 污染闸：新用户回合污染清零（见 core/trust）。
+        self.taint.new_user_turn()
+        # 监督信号打标（core/signals）：检测纠正/放弃/重试并落库，攒学习数据。
+        # 后台线程 best-effort，绝不阻塞对话（仅真人会话记）。
+        if self.interactive:
+            prev = next((m.get("content") or "" for m in reversed(self.messages)
+                         if m.get("role") == "assistant"), "")
+            _fire_and_forget(asyncio.to_thread(_signals.tag, user_message, prev))
         self.messages = await _compress_history(self.client, self.messages, persist=self.interactive)
         self.messages.append({"role": "user", "content": user_message})
 
         system = _build_system_prompt()
+        # 自我处境注入（⑩㉒）：本机感官读数 + 渠道能力画像。任何失败零影响。
+        try:
+            from core import channels as _channels
+            from core import world_state as _world_state
+            extra = [_channels.note(self.channel)]
+            ws = _world_state.context_block()
+            if ws:
+                extra.append(ws)
+            system += "\n\n" + "\n\n".join(extra)
+        except Exception:
+            pass
 
         tool_rounds = 0
-        MAX_TOOL_ROUNDS = _MAX_TOOL_ROUNDS   # 工具调用轮次上限（env 可调，默认 30）
-        last_sig = None      # 上一轮工具调用签名，用于识别"重复无进展"的卡循环
+        # 工具调用轮次上限：实例预算（spawn 子 agent，⑨）优先，否则全局默认。
+        MAX_TOOL_ROUNDS = self.max_tool_rounds or _MAX_TOOL_ROUNDS
+        # 卡循环检测（结果感知）：签名 = (本轮调用, 本轮结果)。只有【调用与结果都
+        # 完全重复】才算"原地打转"；结果一变即视为有进展并清零。比只看调用宽容得多，
+        # 不会误伤"反复读同一份代码来思考/修 bug"这类正常行为。
+        last_round_sig = None
         stall = 0
         while True:
             # 每轮重算暴露的工具集：渐进披露下，上一轮的 load_tools 会在这里生效。
@@ -409,7 +492,7 @@ class JarvisController:
             tool_call_accum: dict[int, dict] = {}  # index → {id, name, arguments}
 
             stream = await self.client.chat.completions.create(
-                model=config.CLAUDE_MODEL,
+                model=self.model,
                 max_tokens=config.MAX_TOKENS_RESPONSE,
                 messages=[{"role": "system", "content": system}] + self.messages,
                 tools=tools,
@@ -447,21 +530,18 @@ class JarvisController:
 
             # 没有工具调用，正常结束
             if finish_reason != "tool_calls" or not tool_call_accum:
+                # 最终必答保证：跑过工具却交白卷 → 强制补一次纯文本总结
+                if not full_text.strip() and tool_rounds > 0:
+                    fallback = await _forced_text_summary(self.client, system, self.messages)
+                    if fallback:
+                        full_text = fallback
+                        yield {"type": "text", "text": fallback}
                 self.messages.append({"role": "assistant", "content": full_text})
                 break
 
-            # 卡循环检测：本轮工具调用与上一轮完全相同（同名+同参）视为无进展。
-            # 连续 _TOOL_STALL_LIMIT 轮如此则判定卡死，提前停——这才是低上限真正
-            # 想防的东西；直接识别它，就能把绝对上限放宽而不误伤正常的大任务。
-            sig = tuple(sorted((tc["name"], tc["arguments"]) for tc in tool_call_accum.values()))
-            stall = stall + 1 if sig == last_sig else 0
-            last_sig = sig
-            if stall >= _TOOL_STALL_LIMIT:
-                note = ("检测到连续重复调用同一工具且没有进展，先停下（疑似卡循环）。"
-                        "换个思路或把这一步说得更具体些，我再试。")
-                yield {"type": "text", "text": "\n⚠️ " + note + "\n"}
-                self.messages.append({"role": "assistant", "content": note})
-                break
+            # 本轮调用签名（结果签名在工具执行后与它合并，见循环末尾的卡循环判定）。
+            calls_sig = tuple(sorted((tc["name"], tc["arguments"])
+                                     for tc in tool_call_accum.values()))
 
             # 绝对上限：防止意外跑飞。达到后【不丢进度】——工具结果都在会话历史里，
             # 直接回复「继续」即可从断点接着做，而不是前功尽弃。
@@ -490,6 +570,7 @@ class JarvisController:
             })
 
             # 执行每个工具，把结果追加为 tool 消息
+            _msgs_before = len(self.messages)   # 快照，循环末用于取本轮工具结果做卡循环判定
             for tc in tool_call_accum.values():
                 try:
                     inputs = json.loads(tc["arguments"]) if tc["arguments"] else {}
@@ -518,8 +599,43 @@ class JarvisController:
                     })
                     continue
 
+                # 白名单执行层兜底（⑧）：即便模型硬调未授权工具也不执行（fail-safe）。
+                if self.allowed_tools is not None and tc["name"] not in self.allowed_tools:
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": (f"（子 agent 权限外的工具 {tc['name']}：未被授权，已拒绝。"
+                                    f"请只用授权清单内的工具完成任务，或在结果里说明缺什么能力。）"),
+                    })
+                    continue
+
+                # 效应闸：不可逆动作必须隔一个用户回合确认（机械拦截，非 prompt 自觉）。
+                allowed, block_msg = self.confirm_gate.check(tc["name"], tc["arguments"])
+                if not allowed:
+                    yield {"type": "tool", "name": f"{tc['name']}（待确认）"}
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": block_msg,
+                    })
+                    continue
+
+                # 污染闸：本回合读过外部不可信内容 → 禁对外动作（防提示注入）。
+                allowed, block_msg = self.taint.check(tc["name"])
+                if not allowed:
+                    yield {"type": "tool", "name": f"{tc['name']}（污染闸拦截）"}
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": block_msg,
+                    })
+                    continue
+
                 yield {"type": "tool", "name": tc["name"]}
-                result = await _execute_tool(tc["name"], inputs)
+                result = await _execute_tool(
+                    tc["name"], inputs,
+                    session="interactive" if self.interactive else "background")
+                self.taint.absorb(tc["name"])
                 self.pending_actions.extend(result.actions)
                 # 若模型直接调用了某领域工具（未先 load_tools），把该组一并激活，
                 # 保持后续暴露集与实际用到的工具一致。
@@ -533,5 +649,20 @@ class JarvisController:
                     "tool_call_id": tc["id"],
                     "content": result.text,
                 })
+
+            # 卡循环判定（结果感知）：本轮 (调用, 结果) 与上一轮完全相同 → 无新信息进来。
+            # 结果一变即清零；连续 _TOOL_STALL_LIMIT 轮"调用+结果"都不变才判卡死。
+            _results_sig = tuple(
+                (m.get("content") or "")[:500]
+                for m in self.messages[_msgs_before:] if m.get("role") == "tool")
+            round_sig = (calls_sig, _results_sig)
+            stall = stall + 1 if round_sig == last_round_sig else 0
+            last_round_sig = round_sig
+            if stall >= _TOOL_STALL_LIMIT:
+                note = ("同一组工具连续多轮返回完全相同的结果、没有新信息进来，先停一下"
+                        "（疑似卡循环）。可以换个思路，或把这一步说得更具体些，我再试。")
+                yield {"type": "text", "text": "\n⚠️ " + note + "\n"}
+                self.messages.append({"role": "assistant", "content": note})
+                break
 
             # 继续循环，让模型消化工具结果

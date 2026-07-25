@@ -78,7 +78,7 @@ _OUTPUT_FORMAT = """只输出一个 JSON 数组（不要其它解释文字），
 
 
 def build_reflection_prompt(focus_source: dict[str, str], last_review: str,
-                            module_map: str) -> str:
+                            module_map: str, trouble: str = "") -> str:
     parts = [
         "你是贾维斯的自我维护者。目标：在【不破坏行为】的前提下，对【周边(OPEN)】代码做小步、稳妥的优化"
         "（可读性、健壮性、去重、修小 bug、补边界处理）。不要为改而改，不要大重构。",
@@ -88,6 +88,14 @@ def build_reflection_prompt(focus_source: dict[str, str], last_review: str,
         "🟢 OPEN 的文件若你给出合格的配套测试，将自动落地。地图：",
         module_map,
         "",
+    ]
+    if trouble:
+        parts += [
+            "## 真实运行故障画像（最高优先级的缺陷来源——有真实失败先修真实失败）",
+            trouble,
+            "",
+        ]
+    parts += [
         "## 上一轮复盘（接着它继续，不要重复已做/已否决的）",
         last_review or "（无，首轮）",
         "",
@@ -102,23 +110,14 @@ def build_reflection_prompt(focus_source: dict[str, str], last_review: str,
 
 # ── 解析模型输出 ──────────────────────────────────────────────────────────────
 def parse_proposals(text: str) -> list[Proposal]:
-    """从模型输出里稳健地抽出提案数组；坏元素跳过。"""
-    raw = (text or "").strip()
-    # 去掉 ```json ... ``` 围栏
-    fence = re.search(r"```(?:json)?\s*(.+?)```", raw, re.DOTALL)
-    if fence:
-        raw = fence.group(1).strip()
-    data = None
-    try:
-        data = json.loads(raw)
-    except Exception:
-        m = re.search(r"\[.*\]", raw, re.DOTALL)
-        if m:
-            try:
-                data = json.loads(m.group(0))
-            except Exception:
-                data = None
-    if not isinstance(data, list):
+    """从模型输出里稳健地抽出提案数组；坏元素跳过。
+
+    2026-07-22 起统一走 core.json_salvage（括号深度抢救）——此前这里是朴素
+    `\\[.*\\]` 正则，正是 json_salvage 文档头警告的写法：提案输出一截断整批丢。
+    提案里带整文件代码，截断概率不低，抢救价值大。"""
+    from core.json_salvage import salvage_json_array, strip_fence
+    data = salvage_json_array(strip_fence(text or ""))
+    if not isinstance(data, list) or not data:
         return []
     out: list[Proposal] = []
     for item in data:
@@ -151,11 +150,25 @@ async def run_cycle(model_fn: ModelFn, *, iterator: Optional[SelfIterator] = Non
     mmap = module_map if module_map is not None else _module_map(it)
 
     last = _read_last_review(rdir)
-    prompt = build_reflection_prompt(src, last, mmap)
+    # 遥测注入（core/telemetry）：真实失败画像 > 读源码猜缺陷。失败降级为空。
+    try:
+        from core import telemetry as _telemetry
+        trouble = _telemetry.trouble_report(days=7)
+    except Exception:
+        trouble = ""
+    prompt = build_reflection_prompt(src, last, mmap, trouble=trouble)
     text = await model_fn(prompt)
     proposals = parse_proposals(text)
 
     recent = _recently_applied(rdir)
+    # ㉕ 盲区修复：冷却不能只看自己写的复盘——外部手（Ned/外部工具）刚改过的
+    # 文件同样该让路，否则反思会对着别人刚调好的文件重新提改动。读真实 git 历史
+    # （近 2 天任何作者碰过的文件都冷却；大批外部提交后反思歇两天是合理的防御）。
+    try:
+        from core import drift as _drift
+        recent |= _drift.recently_touched(days=2, repo=it.repo)
+    except Exception:
+        pass
 
     outcomes: list[Outcome] = []
     review_actions: list[Action] = []
@@ -277,14 +290,44 @@ def _default_focus(repo: Path, limit: int = 2, max_lines: int = 400) -> dict[str
 
 
 async def _default_model_fn(prompt: str) -> str:
-    """live 默认：用主控模型跑一次（惰性引依赖，沙箱/测试不触发）。"""
+    """单发退路：用主控模型跑一次（惰性引依赖，沙箱/测试不触发）。"""
     import config
-    from openai import AsyncOpenAI
-    client = AsyncOpenAI(api_key=config.OPENROUTER_API_KEY,
-                         base_url=config.OPENROUTER_BASE_URL)
+    from core.llm import get_client
+    client = get_client(timeout=300)   # 反思单发出整文件代码，给长超时（core/llm 单一构建点）
     resp = await client.chat.completions.create(
         model=config.CLAUDE_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
     )
     return resp.choices[0].message.content or ""
+
+
+_AGENTIC_HINT = """
+【你有只读自省工具，先查证再开方】
+你运行在一个隔离的只读子 agent 里，可以调用工具核实事实后再提提案：
+- list_self_modules / read_self_source(path) / read_symbol(module, name)：
+  读自己的真实源码——聚焦源码不够看时，把可疑文件完整读出来再判断；
+- search_capability(intent)：查某能力是否已存在（避免提案重复造已有的东西）。
+纪律：提案里引用的每一行现状（函数签名、行为、缺陷）都必须来自你真读过的源码，
+不许凭聚焦片段外推。查证预算有限（几轮），把它花在你真正要改的文件上。
+最后按输出格式给出 JSON 数组（没有真缺陷就输出 []）。
+"""
+
+
+async def _agentic_model_fn(prompt: str) -> str:
+    """live 默认（阶段 1 起）：反思跑在隔离的只读子 agent 里（core/spawn）。
+
+    相比单发 _default_model_fn 的升级：反思者能主动 read_self_source 核实、
+    search_capability 查重，提案基于真读过的代码而非喂给它的两个片段。
+    白名单只读 + 轮次/超时预算 + 上下文隔离由 spawn 机械保证。
+    spawn 不可用/空输出时退回单发（反思绝不因基础设施故障而中断）。
+    """
+    try:
+        from core.spawn import spawn
+        res = await spawn(prompt + _AGENTIC_HINT, label="自我反思",
+                          max_rounds=6, timeout_s=600, contract=False)
+        if (res.raw_text or "").strip():
+            return res.raw_text
+    except Exception:
+        pass
+    return await _default_model_fn(prompt)

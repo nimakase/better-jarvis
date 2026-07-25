@@ -29,27 +29,41 @@ def init_db() -> None:
                 updated_at  TEXT NOT NULL
             );
         """)
+        # ⑮ 轻量版：时效/证据/软删列（幂等迁移——老库补列，新库一步到位）
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(core_memory)")}
+        for col, decl in (
+            ("evidence", "TEXT NOT NULL DEFAULT ''"),        # 出处（哪次对话的什么原话）
+            ("last_confirmed_at", "TEXT"),                   # 最近一次被再次确认
+            ("superseded_at", "TEXT"),                       # 软删时间（NULL=活跃）
+            ("supersede_reason", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            if col not in cols:
+                conn.execute(f"ALTER TABLE core_memory ADD COLUMN {col} {decl}")
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def list_facts() -> list[dict]:
+def list_facts(include_superseded: bool = False) -> list[dict]:
+    q = "SELECT * FROM core_memory"
+    if not include_superseded:
+        q += " WHERE superseded_at IS NULL"
+    q += " ORDER BY id"
     with _get_conn() as conn:
-        rows = conn.execute(
-            "SELECT id, text, created_at, updated_at FROM core_memory ORDER BY id"
-        ).fetchall()
-    return [dict(r) for r in rows]
+        return [dict(r) for r in conn.execute(q).fetchall()]
 
 
 def count() -> int:
+    """活跃事实数（软删的不占 MAX_FACTS 名额）。"""
     with _get_conn() as conn:
-        return conn.execute("SELECT COUNT(*) AS n FROM core_memory").fetchone()["n"]
+        return conn.execute(
+            "SELECT COUNT(*) AS n FROM core_memory WHERE superseded_at IS NULL"
+        ).fetchone()["n"]
 
 
-def add_fact(text: str) -> dict:
-    """追加一条长期事实。返回 {ok, message, id?}。"""
+def add_fact(text: str, evidence: str = "") -> dict:
+    """追加一条长期事实（可带出处）。返回 {ok, message, id?}。"""
     text = (text or "").strip()
     if not text:
         return {"ok": False, "message": "内容为空，未添加。"}
@@ -57,17 +71,50 @@ def add_fact(text: str) -> dict:
         text = text[:MAX_FACT_LEN]
     if count() >= MAX_FACTS:
         return {"ok": False, "message": f"用户档案已满（{MAX_FACTS} 条上限）。请先在设置面板精简后再加。"}
-    # 简单去重：完全相同的文本不重复添加
+    # 简单去重：完全相同的文本不重复添加（视为再次确认）
     with _get_conn() as conn:
-        dup = conn.execute("SELECT id FROM core_memory WHERE text = ?", (text,)).fetchone()
+        dup = conn.execute(
+            "SELECT id FROM core_memory WHERE text = ? AND superseded_at IS NULL",
+            (text,)).fetchone()
         if dup:
-            return {"ok": True, "message": "该事实已在档案中。", "id": dup["id"]}
+            conn.execute("UPDATE core_memory SET last_confirmed_at = ? WHERE id = ?",
+                         (_now(), dup["id"]))
+            return {"ok": True, "message": "该事实已在档案中（已刷新确认时间）。", "id": dup["id"]}
         now = _now()
         cur = conn.execute(
-            "INSERT INTO core_memory (text, created_at, updated_at) VALUES (?, ?, ?)",
-            (text, now, now),
+            "INSERT INTO core_memory (text, created_at, updated_at, evidence,"
+            " last_confirmed_at) VALUES (?, ?, ?, ?, ?)",
+            (text, now, now, (evidence or "")[:MAX_FACT_LEN], now),
         )
         return {"ok": True, "message": "已记入用户档案。", "id": cur.lastrowid}
+
+
+def confirm_fact(fact_id: int) -> dict:
+    """再次确认一条事实（刷新 last_confirmed_at——时效的依据）。"""
+    with _get_conn() as conn:
+        cur = conn.execute("UPDATE core_memory SET last_confirmed_at = ? WHERE id = ?",
+                           (_now(), fact_id))
+    return {"ok": cur.rowcount > 0, "message": "已确认" if cur.rowcount else "无此事实"}
+
+
+def supersede_fact(fact_id: int, reason: str = "") -> dict:
+    """软删一条事实（可回滚——巩固作业只允许软删，绝不硬删）。"""
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE core_memory SET superseded_at = ?, supersede_reason = ?"
+            " WHERE id = ? AND superseded_at IS NULL",
+            (_now(), (reason or "")[:MAX_FACT_LEN], fact_id))
+    return {"ok": cur.rowcount > 0,
+            "message": "已标记过时（可恢复）" if cur.rowcount else "无此活跃事实"}
+
+
+def restore_fact(fact_id: int) -> dict:
+    """恢复一条被软删的事实。"""
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE core_memory SET superseded_at = NULL, supersede_reason = ''"
+            " WHERE id = ?", (fact_id,))
+    return {"ok": cur.rowcount > 0, "message": "已恢复" if cur.rowcount else "无此事实"}
 
 
 def update_fact(fact_id: int, text: str) -> dict:

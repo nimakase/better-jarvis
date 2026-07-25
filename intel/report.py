@@ -41,7 +41,7 @@ body { font-family: "Noto Sans CJK SC","Microsoft YaHei","PingFang SC","WenQuanY
 .header-date { font-size:11pt; color:#666; }
 .header-logo { font-size:12pt; font-weight:700; color:#1a3a5c; letter-spacing:2px; }
 .section-title { font-size:14pt; font-weight:700; color:#1a3a5c; border-left:4px solid #1a3a5c; padding-left:10px; margin-top:22px; margin-bottom:12px; }
-.card-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:8px; }
+.card-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin-bottom:8px; }
 .card { background:#f8f9fb; border:1px solid #e8ecf0; border-radius:6px; padding:10px 12px; }
 .card-label { font-size:10pt; color:#666; margin-bottom:6px; }
 .card-value { font-size:16pt; font-weight:700; color:#1a3a5c; }
@@ -90,10 +90,12 @@ def build_report_html(db_path: str | Path = sl.DEFAULT_DB, days: int = 14,
     event = sorted([(t, it) for t, it in flat if t in EVENT_TYPES],
                    key=lambda x: -(x[1].get("severity") or 0))
     hot = sl.detect_hot_sectors(db_path=db_path, threshold=3.0, as_of=as_of)[:8]
+    # 点名公司走同一个 days 窗口（这个查询没有强度衰减，窗口必须由调用方给）
+    pointed = sl.company_pointed_signals(db_path=db_path, as_of=as_of, days=days)
     today = as_of or date.today().isoformat()
 
-    cards = [("活跃信号", len(flat)), ("价格供需动态", len(price)),
-             ("行业事件", len(event)), ("热点赛道", len(hot))]
+    cards = [("活跃信号", len(flat)), ("点名公司", len(pointed)),
+             ("价格供需动态", len(price)), ("行业事件", len(event)), ("热点赛道", len(hot))]
     cards_html = "".join(
         f'<div class="card"><div class="card-label">{l}</div><div class="card-value">{v}</div></div>'
         for l, v in cards)
@@ -127,11 +129,31 @@ def build_report_html(db_path: str | Path = sl.DEFAULT_DB, days: int = 14,
             '<th>热度</th></tr></thead>'
             f'<tbody>{rows}</tbody></table>')
 
+    # ── 点名公司（金线索）──────────────────────────────────────────────
+    # 这块过去挂在潜客名单后面当「机会轨」，但它是【日报的副产物】不是名单的一部分：
+    # 信号本来就采到了具体公司，日报却一直没展示，反倒是潜客表把它们捡去拼在后面。
+    # 摆回这里还顺带治好了重复刷屏——日报是快照、天然带 days 窗口，窗口内重复出现
+    # 是正确行为；而名单是队列，同一家天天重出就是缺陷。详见 generation.assemble 注释。
+    # 注意：这里【不做 HubSpot 匹配】，日报只回答"发生了什么"，不回答"是否已被认领"。
+    pointed_section = ""
+    if pointed:
+        rows = "".join(
+            f'<tr><td><b>{_esc(p["company_name"])}</b></td>'
+            f'<td>{_esc(p.get("country") or "—")}</td>'
+            f'<td><span class="badge badge-red">{TLABEL.get(p["signal_type"], p["signal_type"])}</span></td>'
+            f'<td>{_esc(p.get("note") or p.get("summary") or "")}</td></tr>'
+            for p in pointed)
+        pointed_section = (
+            '<div class="section-title">点名公司（金线索）</div>'
+            '<table><thead><tr><th style="width:24%">公司</th><th style="width:12%">国家</th>'
+            '<th style="width:12%">信号</th><th>为什么可能有余料</th></tr></thead>'
+            f'<tbody>{rows}</tbody></table>')
+
     body = (
         f'<div class="header"><div class="header-left"><h1 class="header-title">电子元件市场情报日报</h1>'
         f'<span class="header-date">{today}</span></div><div class="header-logo">CCL</div></div>'
         f'<div class="section-title">概览</div><div class="card-grid">{cards_html}</div>'
-        f'{price_section}{event_section}{hot_section}'
+        f'{pointed_section}{price_section}{event_section}{hot_section}'
         '<div class="footer"><p>本报告由 CCL 情报台基于信号库自动生成，数据来源于公开市场信息，仅供参考，不构成投资或采购建议。</p></div>')
 
     return ('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'

@@ -41,10 +41,14 @@ _WORKFLOWS: dict[str, dict] = {}
 
 
 def register_workflow(wf_id: str, name: str, description: str,
-                      builder: Callable, *, confirm: bool = True, needs: str = "") -> None:
+                      builder: Callable, *, confirm: bool = True, needs: str = "",
+                      dispatch: str = "sync") -> None:
+    """dispatch: "sync"（同步跑完再返回，短流程用）| "detach"（派发即返回，
+    长耗时流程用——主对话不被扣押，结果经 delivery 推送交付）。"""
     _WORKFLOWS[wf_id] = {
         "id": wf_id, "name": name, "description": description,
         "builder": builder, "confirm": confirm, "needs": needs,
+        "dispatch": dispatch if dispatch in ("sync", "detach") else "sync",
     }
 
 
@@ -53,7 +57,7 @@ def get(wf_id: str) -> Optional[dict]:
 
 
 def list_workflows() -> list[dict]:
-    return [{k: v[k] for k in ("id", "name", "description", "confirm", "needs")}
+    return [{k: v[k] for k in ("id", "name", "description", "confirm", "needs", "dispatch")}
             for v in _WORKFLOWS.values()]
 
 
@@ -139,7 +143,9 @@ async def run(wf_id: str, **kwargs) -> dict:
 
     rec = {
         "id": wf_id, "name": spec["name"], "status": wrun.status,
-        "failed_at": wrun.failed_at, "seconds": round(wrun.seconds, 2), "at": now,
+        "failed_at": wrun.failed_at,
+        "stopped_at": getattr(wrun, "stopped_at", None),   # StopWorkflow 干净收尾发生处
+        "seconds": round(wrun.seconds, 2), "at": now,
         "steps": [{"name": s.name, "status": s.status, "error": s.error} for s in wrun.steps],
         "summary": wrun.summary(),
     }

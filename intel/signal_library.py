@@ -301,19 +301,32 @@ def query_for_node(sector_ids: list[str], components: Optional[list[str]] = None
 # ────────────────────────── 消费：机会轨 ──────────────────────────
 
 def company_pointed_signals(db_path: str | Path = DEFAULT_DB, min_implication: int = 3,
-                            as_of: Optional[str] = None) -> list[dict]:
-    """点名了具体公司、且余料含义强的 active 信号 → 机会轨 bonus 线索。"""
+                            as_of: Optional[str] = None,
+                            days: Optional[int] = None) -> list[dict]:
+    """点名了具体公司、且余料含义强的 active 信号 → 日报「点名公司（金线索）」板块。
+
+    days：只取最近 N 天采集到的（与 query_report 同口径）。None = 不限（历史行为）。
+
+    ⚠ 这是全库唯一【没有强度衰减】的消费口——其余消费方（query_for_node /
+    detect_hot_sectors）都走 decayed_strength，老信号会自己淡出。这里是裸筛，
+    所以调用方**必须自己给窗口**，否则会把库里累积的所有点名公司全捞出来。
+    日报传 days=14 即可（快照语义：窗口内重复出现是正确的）。
+    """
     conn = connect(db_path)
     try:
         rows = conn.execute(
             """SELECT s.id AS signal_id, s.signal_type, s.severity, s.surplus_implication,
-                      s.date_collected, c.company_name, c.website, c.country, c.note
+                      s.date_collected, s.source_url, s.summary,
+                      c.company_name, c.website, c.country, c.note
                FROM signals s JOIN signal_companies c ON c.signal_id = s.id
                WHERE s.status='active' AND s.surplus_implication >= ?
                ORDER BY s.severity DESC""",
             (min_implication,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        out = [dict(r) for r in rows]
+        if days is not None:
+            out = [r for r in out if _age_days(r["date_collected"], as_of) <= days]
+        return out
     finally:
         conn.close()
 

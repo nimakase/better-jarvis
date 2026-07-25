@@ -65,6 +65,7 @@ async def websocket_chat(websocket: WebSocket):
                 continue
 
             controller = ctx.sessions.get(session_id)
+            controller.channel = "web"   # 渠道感知（㉒）：本轮从网页来
             _seed_controller_from_history(controller)
 
             # 记录用户这轮输入（持久化，供回看 / 跨设备）
@@ -143,6 +144,19 @@ async def _dispatch_one(ws: WebSocket, action):
         await ws.send_text(json.dumps({"type": "file_download", **card}))
         # 文件卡片可安全持久化（不含敏感值），回放时仍可见
         history.append("assistant", card, kind="file", conversation_id=CONVERSATION_ID)
+
+    elif kind == "interactive":
+        # 贾维斯自己设计的可交互回复（按钮/表单）。网页侧原样下发，前端渲染成
+        # 可点按钮：点击 = 把该选项 intent 当作用户输入发送（与飞书回调等价）。
+        await ws.send_text(json.dumps({
+            "type":    "interactive",
+            "mode":    p.get("mode", "options"),
+            "text":    p.get("text", ""),
+            "options": p.get("options", []),
+            "fields":  p.get("fields", []),
+            "submit_label":  p.get("submit_label", "提交"),
+            "submit_intent": p.get("submit_intent", "提交表单"),
+        }, ensure_ascii=False))
 
     elif kind == "credential_reveal":
         # 在本机解密取出【真实】字段值，仅推往本机浏览器。

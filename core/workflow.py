@@ -26,6 +26,20 @@ from typing import Any, Awaitable, Callable, Optional, Union
 StepFn = Callable[[dict], Union[Any, Awaitable[Any]]]
 
 
+class StopWorkflow(Exception):
+    """步骤主动要求【干净收尾】：不是失败，后续步骤不再执行。
+
+    用途：流程走到某处发现"今天没有可做的事 / 前置条件不满足且已妥善善后"
+    （如潜客树全部跑完、HubSpot 未登录但本批已存盘待续跑）。
+    与 abort 的区别：run.status 仍是 ok，不会被当成故障告警；
+    与 skip 的区别：skip 只跳过一步，这里是整条流程到此为止。
+    """
+
+    def __init__(self, reason: str = ""):
+        super().__init__(reason)
+        self.reason = reason
+
+
 @dataclass
 class Step:
     name: str
@@ -51,10 +65,11 @@ class WorkflowRun:
     steps: list[StepResult] = field(default_factory=list)
     context: dict = field(default_factory=dict)
     failed_at: Optional[str] = None
+    stopped_at: Optional[str] = None              # StopWorkflow 干净收尾发生在哪一步
     seconds: float = 0.0
 
     def summary(self) -> str:
-        marks = {"ok": "✓", "skipped": "−", "degraded": "≈", "failed": "✗"}
+        marks = {"ok": "✓", "skipped": "−", "degraded": "≈", "failed": "✗", "stopped": "◼"}
         lines = [f"[{self.status}] workflow {self.name} ({self.seconds:.2f}s)"]
         for s in self.steps:
             tail = f" — {s.error}" if s.error else ""
@@ -88,6 +103,13 @@ async def run_workflow(name: str, steps: list[Step], context: Optional[dict] = N
                 run.steps.append(StepResult(step.name, "ok", attempts, seconds=time.time() - s0))
                 last_err = None
                 break
+            except StopWorkflow as stop:
+                # 干净收尾：不算失败，整条流程到此为止（不重试、不走错误策略）
+                run.steps.append(StepResult(step.name, "stopped", attempts,
+                                            stop.reason or None, time.time() - s0))
+                run.stopped_at = step.name
+                run.seconds = time.time() - t0
+                return run
             except Exception as exc:
                 last_err = exc
                 if logger:

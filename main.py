@@ -14,6 +14,7 @@ import uvicorn
 from fastapi import FastAPI
 
 import config
+import sensors  # noqa: F401 — 感官层：import 即向 world_state 注册采集器（⑩）
 from core import registry
 from core.context import AppContext
 from core.tool_builder import load_all_active_skills
@@ -33,6 +34,42 @@ from web import hubspot as web_hubspot
 from web import reports as web_reports
 from web import workflows as web_workflows
 from web import calendar as web_calendar
+
+# ── 全局日志：控制台 + 文件（logs/jarvis.log），级别 INFO ──────────────────
+# 此前没做全局配置，uvicorn 下第三方 logger（jarvis.*）默认被压到 WARNING，
+# 于是 [飞书] 那些 INFO 关键日志在终端看不到。这里统一放开到 INFO 并落一份
+# 滚动文件，方便回溯与照验证清单排查。uvicorn 自身 logger 不受影响（各自 handler）。
+def _setup_logging() -> None:
+    import logging
+    from logging.handlers import RotatingFileHandler
+    from pathlib import Path
+
+    root = logging.getLogger()
+    if getattr(root, "_jarvis_logging_ready", False):
+        return
+    root.setLevel(logging.INFO)
+    fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+
+    console = logging.StreamHandler()
+    console.setFormatter(fmt)
+    root.addHandler(console)
+
+    try:
+        log_dir = Path(__file__).resolve().parent / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        fh = RotatingFileHandler(log_dir / "jarvis.log", maxBytes=5_000_000,
+                                 backupCount=5, encoding="utf-8")
+        fh.setFormatter(fmt)
+        root.addHandler(fh)
+    except Exception:
+        pass  # 文件写不了也不影响控制台日志
+
+    # 飞书 SDK 的 [Lark] 日志较吵，压到 WARNING，保留我们自己的 jarvis.lark INFO
+    logging.getLogger("lark").setLevel(logging.WARNING)
+    root._jarvis_logging_ready = True
+
+
+_setup_logging()
 
 # 注册工具：导入 tool_builder 即注册元工具；自动发现 connectors/ 下所有连接器
 registry.discover_connectors()
@@ -80,6 +117,11 @@ async def lifespan(app: FastAPI):
             )
             await bridge.start()
             app.state.lark_bridge = bridge
+
+            # 注册为投递渠道：定时任务（潜客名单/日报）的文字与【文件】由此
+            # 主动推到飞书——对话外的产出此前只有 webpush 文字，文件到不了人手里。
+            from core import delivery as _delivery
+            _delivery.register_channel("lark", bridge.push)
         except Exception as _e:
             import logging as _logging
             _logging.getLogger("jarvis").warning("飞书桥启动失败（不影响主服务）：%s", _e)
@@ -121,7 +163,12 @@ app.include_router(web_calendar.router)
 
 def main():
     """控制台入口（pip 安装后可用 `jarvis` 命令启动）。"""
-    uvicorn.run("main:app", host=config.HOST, port=config.PORT, reload=False)
+    # 传 app 对象、而非 "main:app" 字符串：字符串会让 uvicorn 按名【重新 import】
+    # 本模块——但 `python main.py` 时本模块已作为 __main__ 把顶层代码（discover_connectors
+    # / load_all_active_skills / 工作流注册）执行过一遍，再被当成 "main" 模块导入就会
+    # 全部跑第二遍，这正是启动时技能等被加载两次的根因。传对象只执行一次。
+    # （代价：放弃 reload——本项目一直 reload=False，无损失。）
+    uvicorn.run(app, host=config.HOST, port=config.PORT)
 
 
 if __name__ == "__main__":

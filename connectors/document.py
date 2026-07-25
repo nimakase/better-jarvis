@@ -185,10 +185,8 @@ async def _read_image(path: str) -> str:
     with open(path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
 
-    client = AsyncOpenAI(
-        api_key=config.OPENROUTER_API_KEY,
-        base_url=config.OPENROUTER_BASE_URL,
-    )
+    from core.llm import get_client
+    client = get_client()   # 有界超时（core/llm 单一构建点）
     resp = await client.chat.completions.create(
         model=config.CLAUDE_MODEL,
         max_tokens=2048,
@@ -228,7 +226,8 @@ async def _read_pdf_via_openrouter(path: str) -> str:
 
     data = Path(path).read_bytes()
     data_url = "data:application/pdf;base64," + base64.b64encode(data).decode()
-    client = AsyncOpenAI(api_key=config.OPENROUTER_API_KEY, base_url=config.OPENROUTER_BASE_URL)
+    from core.llm import get_client
+    client = get_client()   # 有界超时（core/llm 单一构建点）
     resp = await client.chat.completions.create(
         model=config.CLAUDE_MODEL_LIGHT,
         max_tokens=8192,

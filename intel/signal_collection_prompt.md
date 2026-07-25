@@ -27,7 +27,12 @@
 
 ## 打标用的固定词表
 
-**sectors**（对齐潜客树，用这些 id；一条信号可挂多个）：
+**sectors**（**只能用下面这些 id，一个字都不能改**；一条信号可挂多个）：
+
+> 这份词表是硬契约：潜客树每个产品类目通过 `signal_sectors` 字段声明自己吃哪几个赛道的信号
+> （见 `data/prospect_tree.json`）。**这里多写一个自造 id，那条信号就永远没人消费；
+> 树那边写错一个，该类目的意向分就永远是 0**——两边都不会报错，只会静默失效。
+> 改词表必须同步改树，`tests/test_prospecting.py` 会双向校验。
 `automotive, industrial, telecom, energy, medical, test_measurement, railway, building, aviation, defence, semiconductor_equipment, packaging_printing, marine, agriculture, mining, datacentre, consumer`
 
 **components**（元件大类）：
@@ -80,7 +85,7 @@
   "severity": 4,
   "surplus_implication": 4,
   "confidence": 3,
-  "sectors": ["industrial", "ind_vfd_lv"],
+  "sectors": ["industrial", "energy"],
   "components": ["SiC_IGBT", "MCU"],
   "regions": ["Germany"],
   "companies": [

@@ -2,8 +2,9 @@
 注册 jarvis 工作流（导入即注册，由 main 在启动时加载）。
 
 当前注册：
-  - prospect_daily（今日潜客名单）：选节点 → 联网生成候选 → 接意向信号 →
+  - prospect_daily（今日潜客名单）：选节点（或接续存盘批）→ 联网生成候选 →
     HubSpot 匹配富化 → 排序 → 出富 xlsx 并把"今日名单"落库喂情报台卡。
+    未登录 HubSpot 时不出半成品名单：候选存盘、通知去登录，登录后重跑直接续。
   - signal_collection（采集今日信号）：独立实例跑采集提示词 → 联网广扫 →
     解析结构化信号 JSON → 入库（喂情报台看板与市场情报日报）。
 
@@ -25,57 +26,15 @@ from core import workflow_registry as wr
 _COLLECT_MAX_TOKENS = int(os.environ.get("JARVIS_SIGNAL_COLLECT_MAX_TOKENS", "16000"))
 
 
-def _parse_signal_array(text: str) -> list:
-    """从模型输出里抽出信号数组；容忍前后说明文字与【尾部截断】。
+# 抢救式解析已提到 core/json_salvage 供【采集】与【潜客生成】共用——
+# 两条路都是"让模型吐一大坨 JSON"，都会撞 max_tokens，逻辑不该分叉两份。
+from core.json_salvage import salvage_json_array as _parse_signal_array  # noqa: E402
+from core import delivery as _delivery
 
-    先试整体解析；失败则按括号深度逐个抢救完整的顶层 {...} 对象，
-    丢掉被截断的最后一个——这样即使输出被 max_tokens 切断，也能拿到前面
-    已完整的那些信号，而不是整批归零。
-    """
-    if not text:
-        return []
-    start = text.find("[")
-    if start < 0:
-        return []
-    body = text[start:]
-    # 1) 正常情况：整体就是合法数组
-    end = body.rfind("]")
-    if end > 0:
-        try:
-            data = json.loads(body[:end + 1])
-            if isinstance(data, list):
-                return data
-        except Exception:
-            pass
-    # 2) 抢救：逐个提取完整的顶层对象，跳过被截断的尾巴
-    objs, depth, in_str, esc, obj_start = [], 0, False, False, None
-    for i, ch in enumerate(body):
-        if in_str:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_str = False
-            continue
-        if ch == '"':
-            in_str = True
-        elif ch == "{":
-            if depth == 0:
-                obj_start = i
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0 and obj_start is not None:
-                try:
-                    objs.append(json.loads(body[obj_start:i + 1]))
-                except Exception:
-                    pass
-                obj_start = None
-    return objs
-
-_TOP_FIELDS = ("rank", "company_name", "intent_tier", "crm_state", "weight",
-               "hubspot_owner", "surplus_signals", "website")
+# 落库给情报台「今日名单」卡读的字段（v0.4 去掉信号字段；v0.5 去掉 seen_before，
+# 历史库已整条移除）
+_TOP_FIELDS = ("rank", "company_name", "crm_state", "hubspot_owner",
+               "category", "confidence", "website")
 
 
 def _store_dir() -> Path:
@@ -85,15 +44,24 @@ def _store_dir() -> Path:
     return d
 
 
-def _store_today_prospects(records: list, res: dict) -> None:
-    """把本次产出的名单落成结构化 JSON，供情报台「今日名单」卡读取。"""
+def _store_today_prospects(records: list, res: dict, node: dict | None = None) -> None:
+    """把本次产出的名单落成结构化 JSON，供情报台「今日名单」卡读取。
+
+    v0.4 去掉 signal_stale / signal_age_days（潜客已与信号解耦，名单跟信号新鲜度
+    毫无关系，留着只会在卡片上挂一句误导人的提示）；改带 node_label——现在节点是
+    (产品类目 × 区域)，卡片上说清今天扫的是哪个类目哪个区域更有用。
+    v0.5 去掉 degraded：未登录时不再出半成品名单（存盘-通知-续跑），
+    能走到这里的名单一定是匹配过的。
+    """
     items = [{k: r.get(k) for k in _TOP_FIELDS} for r in (records or [])[:50]]
+    node = node or {}
+    label = node.get("label") or ""
+    if label and node.get("region_label"):
+        label = f'{label} · {node["region_label"]}'
     payload = {
         "date": date.today().isoformat(),
         "count": len(records or []),
-        "degraded": bool((res or {}).get("degraded")),
-        "signal_stale": bool((res or {}).get("signal_stale")),
-        "signal_age_days": (res or {}).get("signal_age_days"),
+        "node_label": label,
         "xlsx_path": (res or {}).get("path"),
         "items": items,
     }
@@ -114,7 +82,6 @@ def load_today_prospects() -> dict | None:
 def _build_prospect_daily():
     """运行时组装潜客工作流（注入浏览器/agent 等运行时依赖）。"""
     import config
-    from intel import signal_library as sl
     from prospecting import workflows as pw
 
     # 潜客树：jarvis 拥有自己的副本（data/prospect_tree.json）并就地推进（mark_done 写回）。
@@ -126,35 +93,72 @@ def _build_prospect_daily():
     candidates.append(owned)
     candidates.append(config.DATA_DIR / "prospect_tree.json")
     tree_path = next((p for p in candidates if p.exists()), owned)
-    db_path = sl.DEFAULT_DB
     prompt_path = Path(__file__).resolve().parent / "prospect_generation_prompt.md"
 
     generate_fn = pw.make_llm_generate_fn(prompt_path)
-    preflight_fn, match_fn, close = pw.make_hubspot_runtime()
+    # preflight/enrich 是 async 包装：浏览器整个生命周期在专属线程里
+    # （sync Playwright 拒绝在事件循环线程运行 + 整批匹配不能冻住 app）
+    preflight_fn, enrich_fn, close = pw.make_hubspot_runtime()
     base_output = pw.make_output_fn(config.DATA_DIR / "prospects", "prospect", "今日潜客名单")
 
     def output_fn(ctx):
         res = base_output(ctx) or {}
-        _store_today_prospects(ctx.get("enrich") or [], res)
+        _store_today_prospects(ctx.get("enrich") or [], res, ctx.get("node"))
         return res
 
     steps = pw.build_prospect_workflow(
-        tree_path=tree_path, db_path=db_path,
+        tree_path=tree_path,
         generate_fn=generate_fn, preflight_fn=preflight_fn,
-        match_fn=match_fn, output_fn=output_fn,
+        enrich_fn=enrich_fn, output_fn=output_fn,
+        pending_path=config.DATA_DIR / "prospects" / "pending_batch.json",
     )
     return {"steps": steps, "context": {}, "cleanup": close}
 
 
 wr.register_workflow(
     "prospect_daily", "今日潜客名单",
-    "选潜客树节点 → 联网生成候选 → 接意向信号 → HubSpot 匹配富化 → 排序 → 出富 xlsx 并落「今日名单」",
-    _build_prospect_daily, confirm=True,
-    needs="需 prospect_tree.json 与已登录 HubSpot；未登录则自动降级为仅按意向排序的名单（仍可出）",
+    "选潜客树节点 → 联网生成候选 → HubSpot 匹配富化 → 排序 → 出富 xlsx 并落「今日名单」",
+    _build_prospect_daily, confirm=True, dispatch="detach",
+    needs="需 prospect_tree.json 与已登录 HubSpot；未登录则本批候选存盘并通知，登录后重跑直接续跑匹配",
 )
 
 
 # ── 信号采集工作流（替代"在对话里让模型自己搜+乱建工具"的不可靠路径）──────────────
+async def _completion_text(prompt: str, retries: int = 1) -> str:
+    """流式累积一次大补全；传输错误/空输出自动重试 retries 次。
+
+    流式的意义：非流式下响应体截断 = SDK 解析炸整批；流式下截断 = 提前收流，
+    已累积的文本仍然可用。单测可 monkeypatch 本函数。
+    """
+    import asyncio as _asyncio
+    import config
+    from core.llm import get_client
+    client = get_client(timeout=float(os.environ.get("JARVIS_COLLECT_TIMEOUT", "540")))
+    last_err = None
+    for attempt in range(retries + 1):
+        text = ""
+        try:
+            stream = await client.chat.completions.create(
+                model=config.CLAUDE_MODEL,          # 含 :online，可联网检索
+                max_tokens=_COLLECT_MAX_TOKENS,     # 采集专用高上限
+                messages=[{"role": "user", "content": prompt}],
+                stream=True,
+            )
+            async for chunk in stream:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                if delta is not None and delta.content:
+                    text += delta.content
+        except Exception as e:  # noqa: BLE001 — 传输中断：已累积的照样返回
+            last_err = e
+        if text.strip():
+            return text
+        if attempt < retries:
+            await _asyncio.sleep(3)                  # 空手而归才重试
+    if last_err is not None:
+        raise RuntimeError(f"采集调用失败（重试 {retries} 次后仍无输出）：{last_err}")
+    return ""
+
+
 def _build_signal_collection():
     """采集今日全行业信号：独立 controller 跑固定采集提示词 → 解析 JSON → 入库。
 
@@ -167,20 +171,13 @@ def _build_signal_collection():
     template = prompt_path.read_text(encoding="utf-8")
 
     async def collect(ctx: dict) -> list:
-        # 采集不需要工具循环，只要一次带 :online 的文本补全。直连模型调用，
-        # 用采集专用的高 max_tokens（不受通用对话 4096 护栏限制），避免 JSON 截断。
-        import config
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(
-            api_key=config.OPENROUTER_API_KEY,
-            base_url=config.OPENROUTER_BASE_URL,
-        )
-        resp = await client.chat.completions.create(
-            model=config.CLAUDE_MODEL,          # 含 :online，可联网检索
-            max_tokens=_COLLECT_MAX_TOKENS,     # 采集专用高上限
-            messages=[{"role": "user", "content": template}],
-        )
-        text = (resp.choices[0].message.content or "") if resp.choices else ""
+        # 采集不需要工具循环，只要一次带 :online 的文本补全。
+        # 实测教训（2026-07-22）：非流式请求 + 大 max_tokens 的响应体巨大，传输
+        # 中途被截断时 SDK 解析【整个响应体 JSON】直接抛
+        # `Expecting value: line N column 1` ——整批归零，salvage 根本没机会上场。
+        # 改为【流式累积】：流被切断只是提前结束，已到手的部分照常走抢救式解析，
+        # 「传输层截断」从整批失败降级为少最后几条。外加一次自动重试。
+        text = await _completion_text(template)
         signals = _parse_signal_array(text)     # 抢救式解析，容忍尾部截断
         if not signals:
             # 明确报错而不是静默返回空——否则工作流会"显示成功但库是空的"。
@@ -203,15 +200,79 @@ def _build_signal_collection():
             )
         return result
 
+    def expire(ctx: dict) -> dict:
+        """把过老的信号标成 expired，让 `signals.status` 这一列**说真话**。
+
+        为什么必须有人调它：`expire_stale()` 原先写好了却**没有任何调用方**，
+        于是所有信号永远是 `active`。这对现有消费方无害（query_for_node /
+        detect_hot_sectors 靠 `decayed_strength` 收敛，老信号强度自己衰减到约等于 0；
+        日报靠 `days` 窗口），但它埋了个陷阱：`status` 长得像「活跃/过期」的开关，
+        实际恒为 active——将来任何人写 `WHERE status='active'` 都会以为拿到的是
+        新鲜信号，实际拿到全部历史。不报错，只静默给错结果。
+
+        接在 ingest **之后**：本次采到的信号刚刷新 date_collected，不会被误伤；
+        而且合并逻辑会把再次见到的老信号复活成 active，所以反复出现的行情不会被清掉。
+        on_error=skip：这是收拾屋子，塌了也不该让今天的采集算失败。
+        """
+        n = sl.expire_stale()
+        return {"expired": n}
+
+    async def notify(ctx: dict) -> dict:
+        """采集完成 → 生成市场情报日报 PDF，把摘要 + PDF 作为【一条】投递发出。
+
+        与潜客名单业务逻辑对齐：信号是原料、市场情报日报（PDF）才是成品。此前信号
+        采集只发一句文字摘要、没有可翻开的成品；现在顺手渲染日报 PDF 作为附件一并
+        发出（飞书文件消息）。PDF 生成失败不影响文字摘要照发（best-effort）。
+        ctx["output"] 供框架 _notify_done 把 PDF 登记进产物图书馆。
+        """
+        from intel import signal_library as sl
+        grouped = sl.query_report(days=1)
+        total = sum(len(v) for v in grouped.values())
+        counts = sorted(
+            [(st, len(lst)) for st, lst in grouped.items()],
+            key=lambda x: x[1], reverse=True,
+        )
+        summary_parts = [f"{st}×{n}" for st, n in counts]
+        high_impl = sum(
+            1 for lst in grouped.values()
+            for s in lst if s.get("surplus_implication", 0) >= 3
+        )
+        content = (
+            f"采集到 {total} 条信号：" + "、".join(summary_parts) + "。"
+            + (f"其中高余料含义信号 {high_impl} 条。" if high_impl else "")
+        )
+        # 成品：市场情报日报 PDF（14 天窗口，与 query_report 同口径）。
+        # best-effort——渲染失败只丢附件、摘要照发，并在文字里如实说明。
+        pdf_path = None
+        try:
+            from intel import report as _report
+            pdf_path = await _report.generate_report_pdf(days=14)
+        except Exception as e:  # noqa: BLE001
+            import logging
+            logging.getLogger("jarvis").warning("信号采集日报 PDF 生成失败：%s", e)
+            content += "\n（日报 PDF 生成失败，仅文字摘要；原因见日志）"
+        result = _delivery.deliver(
+            track="signal_collection",
+            title="📡 今日信号采集完成",
+            content=content,
+            severity="normal",
+            attachments=[pdf_path] if pdf_path else None,
+        )
+        if pdf_path:
+            ctx["output"] = {"path": pdf_path}   # 供 _notify_done 登记产物
+        return {"pushed": result.get("delivered", False), "total": total,
+                "pdf": pdf_path}
     return [
         wf.Step("collect", collect),
         wf.Step("ingest", ingest),
+        wf.Step("expire", expire, on_error="skip"),
+        wf.Step("notify", notify, on_error="skip"),
     ]
 
 
 wr.register_workflow(
     "signal_collection", "采集今日信号",
     "独立实例联网广扫电子元件/整机制造行业 → 结构化信号 JSON → 入库（喂情报台看板与市场情报日报）",
-    _build_signal_collection, confirm=False,
+    _build_signal_collection, confirm=False, dispatch="detach",
     needs="依赖模型联网检索（:online）；约耗 1–3 分钟，产出当日信号入库",
 )

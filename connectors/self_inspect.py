@@ -24,7 +24,7 @@ tool = partial(_tool, group="self")
 REPO_ROOT = self_model.REPO_ROOT
 
 # 扫描这些位置的源码（构成「自我地图」）
-_SCAN_DIRS = ["core", "connectors", "web", "intel", "prospecting", "skills"]
+_SCAN_DIRS = ["core", "connectors", "web", "intel", "prospecting", "skills", "sensors"]
 _SCAN_ROOT_FILES = ["main.py", "config.py"]
 
 # read_self_source 允许的扩展名（源码/文档/配置文本）

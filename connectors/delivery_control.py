@@ -65,6 +65,20 @@ async def delivery_status() -> str:
     if pend:
         lines.append("临近待确认休假：" + "；".join(
             f"{r['start']}~{r['end']}（{r.get('reason', '')}）id={r.get('id')}" for r in pend))
+    # ㉔ 回执：最近几次推送到底送达没有（此前发射即忘，无从查证）
+    try:
+        from core import telemetry
+        receipts = telemetry.delivery_receipts(limit=5)
+        if receipts:
+            lines.append("最近投递回执：")
+            for r in receipts:
+                ok = "✓已送达" if r["delivered"] else "✗未送达"
+                chans = "、".join(
+                    f"{k}{'成功' if v.get('ok') else '失败:' + (v.get('error') or '')[:20]}"
+                    for k, v in (r.get("channels") or {}).items())
+                lines.append(f"  [{ok}] {r['track']} · {r['created_at'][:16]} · {chans}")
+    except Exception:
+        pass
     return "\n".join(lines)
 
 

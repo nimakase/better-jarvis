@@ -23,7 +23,8 @@ tool = partial(_tool, group="self")
 )
 async def run_self_review() -> str:
     from core import self_review
-    res = await self_review.run_cycle(self_review._default_model_fn)
+    # 阶段 1 起：反思跑在隔离只读子 agent 里（能自己翻源码/查重），见 _agentic_model_fn。
+    res = await self_review.run_cycle(self_review._agentic_model_fn)
     lines = [
         f"自我迭代反思完成：本轮 {res['n_proposals']} 条提案。",
         f"✅ 已落地({len(res['applied'])})：" + ("、".join(res["applied"]) or "无"),

@@ -333,7 +333,11 @@ APScheduler；任务存 `schedules/<名>/config.json`；触发时用独立 `Jarv
 
 ### 10.4 工作流范式
 
-`core/workflow.py`（引擎：有序 Step + 共享 ctx + abort/skip/degrade + 重试 + 可观测 `WorkflowRun`）＋ `core/workflow_registry.py`（注册/运行/落盘运行记录）。旗舰 `prospect_daily`（`intel/workflow_defs.py`）：**信号新鲜度自检**（`signal_check`：信号库最近采集超过 `config.SIGNAL_FRESHNESS_DAYS`＝7 天即视为过期，**不阻断**、只在推送文本/xlsx 顶部红字/情报台卡三处标注「意向排序仅供参考」）→选节点→联网生成→接意向信号→**HubSpot 富化**（`pipeline.enrich_records` + matcher，登录失效则降级仅按意向排序）→排序→出富 xlsx + 落「今日名单」喂情报台卡。信号对潜客是**可选增强**而非硬依赖：信号缺失/过期仍照常出名单，仅意向打分退化为基线。
+`core/workflow.py`（引擎：有序 Step + 共享 ctx + abort/skip/degrade + 重试 + `StopWorkflow` 干净收尾 + 可观测 `WorkflowRun`）＋ `core/workflow_registry.py`（注册/运行/落盘运行记录）。旗舰 `prospect_daily`（`intel/workflow_defs.py`，v0.5）：选节点（产品类目 × 区域，**或接续存盘批**）→ 联网生成候选 → **checkpoint 落盘**（下游任何失败都不浪费这次生成）→ preflight（HubSpot 未登录 → 通知去登录 + `StopWorkflow`，**不出半成品名单、不推进树**；登录后重跑直接续存盘批）→ **HubSpot 富化**（`pipeline.enrich_records` + matcher）→ **多级排序**（CRM 状态 > confidence）→ 出 xlsx + 落「今日名单」喂情报台卡 → 推进树 → 清存盘批。树全部跑完同样走 `StopWorkflow`（提示 `python -m prospecting.reset` 复位），不是故障。
+
+> **v0.4：潜客轨与信号库彻底解耦。** `prospecting` 包不 import `intel.*`（`tests/test_prospecting.py` 用 AST 钉死）。潜客名单服务 **0→1 大范围开发**（周期以月计、公司级粒度），信号服务**存量决策**（时效以周计、赛道/元件级粒度）——「这周工业自动化在冒余料」并不改变你要不要给某家公司打第一通电话；而且赛道级信号会让**一整批候选拿到同一个分数**，在名单内部几乎没有区分度，只是让不同日子的名单互相不可比。随之移除：`attach_intent`、`signal_check` 步与过期横幅、`intent_score`/`intent_tier`/`weight`/`surplus_signals`/`sources` 列、`node_sectors`、树的 `signal_sectors`。信号侧（采集/日报/`expire_stale`）完全不受影响。
+>
+> **v0.5：瘦身 + 降级路径重做。** ① `assemble` 步删除（只剩打没人读的 `track` 标记）；② 潜客历史库整条删除（`history.py`、`history_mark`/`history_record` 步、`seen_before` 列与排序级——跨批重复率低，不值一个存储层）；③ 降级从「全批标 `pending` 照样出表」改为**存盘-通知-续跑**（旧路径降级批照样 `mark_done`，节点被消耗、永远补不上匹配，"一键补匹配"从来不存在）；④ 生成提示词硬排除**中国大陆与香港公司**（按母公司/总部判，开发难度过高）；⑤ HubSpot 拉起/登录统一走 `prospecting/hubspot_session`（screener 验证过的 headless 先试 → 有头轮询流程），`make_hubspot_runtime`、screener、`login_manager` 三处同源，profile 与登录态共用。
 
 **触发纪律**（system prompt 政策 + 工具描述双重约束）：报告与工作流**默认不做**，只在用户显式索取或定时触发；有副作用的工作流（开浏览器/连 HubSpot）**跑前先告知并确认**；不明确先问。UI 触发（情报台"运行潜客名单"按钮、报告中心生成按钮）等同显式动作。
 
@@ -343,4 +347,55 @@ APScheduler；任务存 `schedules/<名>/config.json`；触发时用独立 `Jarv
 
 ### 10.6 运行前置（潜客工作流实跑需要）
 
-`DATA_DIR/prospect_tree.json`（潜客树）+ 已登录 HubSpot + playwright。缺登录→自动降级出"仅按意向"名单；缺树→`select` 步失败并记入运行记录。报告与情报台其余功能不依赖这些。
+`data/prospect_tree.json`（潜客树，**仓库内自有副本**，就地推进）+ 已登录 HubSpot + playwright。缺登录→候选存盘 + 通知去「本地调试」登录，登录后重跑直接续跑匹配（v0.5，不再出半成品名单）；缺树→`select` 步失败并记入运行记录。报告与情报台其余功能不依赖这些。
+
+### 10.7 潜客树：产品类目 × 区域（`data/prospect_tree.json`）
+
+12 个赛道 / 76 个**产品类目**叶子（v2.0）。骨架取自海关 HS 编码 84/85/87/88/90/94 章，只保留「含板级电子的成品设备」，剔除元件本体（8532/8533/8541/8542）与原材料——HS 的价值是 **MECE**：能回答「到底扫完没有」，这是自己拍脑袋列赛道永远答不了的。但 HS 分的是**流动的货物**不是**企业**，所以 `label` 一律用人话产品类目（「工业摄像头与机器视觉系统」），`hs_codes` 只在背后框定边界并喂给生成提示词当搜索抓手。
+
+### 区域是独立维度（v2.0）：节点 =（产品类目 × 区域）
+
+`regions` 用 `EU / NA / SEA` 三个代号，人话名在树顶层 `regions_meta`；`select_node` 展开成人话再进提示词（否则模型得自己猜 "SEA" 指哪些国家）。
+
+**一次只发一个区域。** 76 类目 × 3 区域 = **228 个节点**，一天一个约 7.5 个月跑完一轮。
+
+> **为什么不在一次输出里覆盖三个区域**：一次生成的预算与注意力有限，让模型同时兼顾多个区域必然厚此薄彼——实际表现是把力气全花在第一个区域，后两个根本不看，而且**不报错**。这是结构性的，改提示词解决不了（v1 曾写「第一个区域挖不出新的了就往下走」，但欧洲一个类目根本挖不尽，等价于只做欧洲）。所以把「一次搜索内的分配问题」改成「跨天的调度问题」。
+>
+> **为什么同一类目要连跑完三个区域再换**（`_pick` 里 `started` 优先级最高）：这样才能拿到**同类目、同口径、同模型**的区域对照——「工业机器人：欧洲 45 家 / 美洲 28 家 / 东南亚 9 家」。若允许中途跳走，对照就散成一堆拼不起来的马赛克（数控只扫过美洲、机器人只扫过欧洲），任何时点停下来都得不到完整视图。
+>
+> **平均分配是错的**：各区域真实供给密度差好几倍，强行均分会让稀薄的区域靠凑数——正是提示词里刚修掉的毛病换个地方复发。
+
+状态记在 `leaf.done_regions[]`；三个区域都跑完 `leaf.status` 才转 `done`，据此重算赛道 `partial/done`。`mark_node_done(tree, leaf_id, region)` **必须传 region**，否则会一次标掉整个类目、跳过另外两个区域。`node_key`（`leaf:region`）用于 xlsx 文件名与历史记账，保证三次扫描可区分、事后能做区域对照。
+
+选节点优先级：已开跑但未跑完三区域的类目 > 所在赛道已 partial > DFS 文件序。
+
+**两套分类学的接缝【已随 v0.4 解耦拆除】**：v0.4 之前潜客树叶子靠 `signal_sectors` 字段映射到信号库的 17 赛道词表（`select_node` 产出 `node_sectors` 查信号打意向分）。解耦后树与信号库没有任何关联，选节点是纯确定性推进；此段仅留作历史备注，防止有人照旧文档给树加回 `signal_sectors`。
+
+### 10.8 潜客历史库【v0.5 已整条删除】
+
+原 `prospecting/history.py`（SQLite，域名/公司名归一化主键）负责给跨批重复公司打 `seen_before` 标记。v0.5 删除：同一类目的三个区域不会撞车，只有相邻类目偶发重叠——重复率撑不起一个存储层 + 两个工作流步骤 + 一列表格。偶发撞车由人在表里自行判断。随之删除 `seen_before` 列与第三排序级、`reset.py` 的历史库清理项（保留对老机器残留 `prospect_history.db*` 的顺手清除）。
+
+### 10.9 机会轨已迁往日报（契约 v0.2，**名单只有覆盖轨一条**）
+
+信号点名的具体公司（原 `track=opportunity`）不再拼进潜客名单，改为市场情报日报的「**点名公司（金线索）**」板块（`intel/report.py`）。日报本来就采到了这些公司却从不展示，反倒是潜客表把它们捡去拼在后面——这块内容原本就长错了地方。
+
+拆开的三条理由（详见 `prospect_pipeline_contract.md` §5）：**打分尺度不可比**（覆盖轨 intent 是信号强度求和、无上限；机会轨是 `severity×2`、封顶 10）、**资格口径不一致**（覆盖轨过了 OEM 画像筛，机会轨一道筛都没过）、**队列 vs 快照**（名单是队列，同一家天天重出是缺陷；日报是快照，窗口内重复是正确的）。
+
+> ⚠ `sl.company_pointed_signals()` 是**全库唯一没有强度衰减的消费口**（其余都走 `decayed_strength`，老信号会自己淡出）。它是裸筛 `status='active' AND surplus_implication>=N`，**调用方必须自己给 `days` 窗口**，否则会把库里累积的所有点名公司全捞出来——这正是它挂在潜客名单上时每天刷屏的原因。日报传 `days=14`（与 `query_report` 同口径）。
+>
+> 另注：`sl.expire_stale()` 现已挂在 `signal_collection` 工作流末尾（`ingest` 之后、`on_error=skip`）。此前它**写好了却没有任何调用方**，导致 `signals.status` 恒为 `active`——对覆盖轨/热点赛道无害（它们靠 `decayed_strength` 收敛而非 status），但那一列长得像「活跃/过期」的开关却是假的，将来谁写 `WHERE status='active'` 都会静默拿到全部历史。接上之后这列说真话，库也自己收敛。
+>
+> 顺序不能反：排在 `ingest` 之后，本次刚采的信号 `date_collected` 是今天、不会被误伤；而 `ingest` 的合并逻辑会把再次见到的老信号刷新并复活成 `active`，所以反复出现的行情不会被清掉。
+
+**已知代价（有意接受）**：点名公司不再过 HubSpot 匹配——日报纯渲染、不跑浏览器，所以它回答「发生了什么」，不回答「这家是否已被认领」。要跟进就走潜客链单独查。
+
+### 10.10 大批量生成的两条路必须同构（截断保底）
+
+「让模型吐一大坨 JSON」在本项目有**两条路**：`signal_collection`（采集信号）与 `prospect_daily` 的 `generate` 步（生成候选公司）。两者都会撞 `max_tokens`，所以必须共用同一套保底，否则修好一条、另一条继续踩。
+
+- **预算**：都用 16000（`_COLLECT_MAX_TOKENS` / `_GEN_MAX_TOKENS`，均可用 env 覆盖），**不能用 `config.MAX_TOKENS_RESPONSE`（4096）**——那是给聊天回复定的护栏。一个节点最多 100 家候选、每家还要写具体的 `contact_rationale`，约需 8k–15k tokens。
+- **解析**：都走 `core/json_salvage.salvage_json_array()`，按括号深度逐个抢救完整的顶层对象，只丢被截断的最后一条。
+- **调用方式**：都是**直连 `AsyncOpenAI`**（一次带 `:online` 的文本补全），不走 `JarvisController`——这两步不需要工具循环，联网检索由模型内建。
+- **失败要响**：解析不出任何条目时**抛错**而不是返回空，否则工作流会「显示成功但库/名单是空的」。
+
+> **这曾经是真 bug**：潜客生成原先用 `JarvisController`（4096 护栏）+ 朴素解析（`find("[")` … `rfind("]")` … `json.loads`，失败 `return []`）。截断时 `rfind("]")` 会命中内层 `"components":[...]` 的收尾方括号，切出的片段非法 → 返回空 → **前面已生成的几十家全部丢弃**，表现为「工作流跑成功但一家都没有」。采集轨早就修好了这两点，生成轨一直没跟上。`tests/test_prospecting.py` 现在把「截断仍救回」「两边预算同档」「共用同一实现」都钉死了。

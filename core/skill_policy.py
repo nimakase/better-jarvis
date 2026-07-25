@@ -159,6 +159,58 @@ BUILDING_BLOCKS: dict[str, dict] = {
             ),
         ],
     },
+    "prospecting.hubspot_session": {
+        "desc": "HubSpot 会话统一入口（v0.5：拉起/登录探测全系统只此一份）",
+        "symbols": ["acquire", "check", "launch", "Session"],
+        "notes": [
+            "拿【已登录、停在目标视图】的会话用 `acquire(paths, lg, view_url)`：headless 先试、"
+            "未登录才弹有头窗口轮询等手动登录。无人值守场景传 `headed_login=False`（不弹窗，"
+            "未登录直接抛 SessionExpiredError，由调用方善后）。",
+            "返回的 Session 用 `session.attach(browser)` 挂到 HubSpotBrowser 上复用取数方法；"
+            "用完必须 `session.close()`（或 with 语句），否则 profile 留锁。",
+            "只探测不保持会话用 `check(paths, lg)`，返回 'ok'/'expired'/'unknown'，探完自动关。",
+            "登录态判定内部是【轮询】的（HubSpot 是 SPA，单拍 detect 会在渲染完成前误判未登录）"
+            "——不要自己在外面再写一层 detect_auth_state 单拍检查。",
+        ],
+        "recipes": [
+            (
+                "拿一个已登录、停在指定视图的会话（screener 同款）",
+                "from prospecting import hubspot_session as hs\n"
+                "session = None\n"
+                "try:\n"
+                "    session = hs.acquire(paths, lg, view_url)\n"
+                "    browser = HubSpotBrowser(paths, lg)\n"
+                "    session.attach(browser)\n"
+                "    ...  # 用 browser 取数\n"
+                "finally:\n"
+                "    if session is not None:\n"
+                "        session.close()"
+            ),
+        ],
+    },
+    "core.results": {
+        "desc": "工具结构化返回（把文件/带外动作真正送到用户面前的法定接口）",
+        "symbols": ["ToolResult", "Action", "file_download"],
+        "notes": [
+            "技能生成了文件（xlsx/pdf/图片…）要给用户，【必须】返回 "
+            "`ToolResult(text=..., actions=[file_download(path, filename, size)])`——"
+            "网页会显示下载卡片、飞书会发真实文件消息。",
+            "只在返回文本里写文件路径、或让模型『去调 send_file_to_chat』都是不可靠的："
+            "模型经常不执行，文件就到不了用户手里（这是踩过的真坑）。",
+            "actions 不进对话历史、不发给云端模型；text 才是模型和用户看到的内容。",
+        ],
+        "recipes": [
+            (
+                "生成 xlsx 并直接发到对话",
+                "from core.results import ToolResult, file_download\n"
+                "path = _write_xlsx(...)   # pathlib.Path\n"
+                "return ToolResult(\n"
+                "    text=f'已生成 {path.name}，文件已直接发送到对话界面。',\n"
+                "    actions=[file_download(str(path), path.name, path.stat().st_size)],\n"
+                ")"
+            ),
+        ],
+    },
 }
 
 

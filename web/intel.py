@@ -46,20 +46,29 @@ async def _card_today_prospects() -> dict:
         data = None
     if not data or not data.get("items"):
         return {"has_content": False}
-    tier_tone = {"A": "red", "B": "yellow", "C": "dim"}
-    items = [{
-        "text": f'{r.get("company_name", "")}（{r.get("crm_state", "")}{("·" + r.get("hubspot_owner")) if r.get("hubspot_owner") else ""}）',
-        "badge": r.get("intent_tier"),
-        "tone": tier_tone.get(r.get("intent_tier"), "dim"),
-        "url": r.get("website") or None,
-    } for r in data["items"][:12]]
+    # v0.4：徽标从 intent_tier（信号意向分档）改为 crm_state——潜客与信号已解耦，
+    # 名单按 CRM 状态 > confidence 排。全新未认领的最该打，标红。
+    # v0.5：不再有 pending（未登录时不出半成品名单，改为存盘-通知-续跑）。
+    crm_tone = {"new": "red", "unowned": "yellow", "review": "yellow",
+                "owned": "dim", "unknown": "dim"}
+    crm_label = {"new": "全新", "unowned": "未认领", "review": "待核",
+                 "owned": "已认领", "unknown": "存疑"}
+    items = []
+    for r in data["items"][:12]:
+        crm = r.get("crm_state") or ""
+        owner = r.get("hubspot_owner")
+        conf = r.get("confidence")
+        tail = f'·{owner}' if owner else ""
+        conf_txt = f'（把握 {conf}）' if conf else ""
+        items.append({
+            "text": f'{r.get("company_name", "")}{conf_txt}{tail}',
+            "badge": crm_label.get(crm, crm),
+            "tone": crm_tone.get(crm, "dim"),
+            "url": r.get("website") or None,
+        })
     note = f'{data.get("date", "")} · 共 {data.get("count", 0)} 家'
-    if data.get("degraded"):
-        note += "（未匹配 HubSpot，仅按意向排序；登录后重跑可补匹配）"
-    if data.get("signal_stale"):
-        age = data.get("signal_age_days")
-        note += ("（信号库为空，意向排序仅供参考）" if age is None
-                 else f"（信号已 {age} 天未更新，意向排序仅供参考）")
+    if data.get("node_label"):
+        note += f' · {data["node_label"]}'
     return {"has_content": True, "urgency": "high", "items": items, "note": note}
 
 

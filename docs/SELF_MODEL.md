@@ -28,6 +28,14 @@
 | `core/memory.py` | Fernet 加密 KV 基础设施 + 密钥管理 |
 | `core/workflow.py` | 工作流引擎（轨道，不许改） |
 | `core/scheduler.py` | 定时调度基础设施 |
+| `core/effects.py` | 动作效应五级分类 + 不可逆确认闸；可自改即可拆闸 |
+| `core/trust.py` | 数据信任分级 + 污染闸（防提示注入）；同上 |
+| `core/spawn.py` | 子 agent 抽象：白名单授权+预算；可自改即可自我扩权 |
+| `core/world_state.py` | 世界状态总线：产出注入 system prompt 的处境块（注入面） |
+| `core/channels.py` | 渠道能力画像：同上，注入 system prompt（注入面） |
+| `core/consolidation.py` | 记忆巩固：机械闸(证据/去重/限量/只软删)守档案完整性 |
+| `core/drift.py` | 自我漂移检测：喂和解闸与冷却判据；可自改即可致盲护栏 |
+| `core/llm.py` | 模型客户端单一构建点（超时政策统一处；改它影响全部模型调用） |
 | `connectors/vault.py` | 证件保险箱加密存储核心 |
 | `connectors/credentials.py` | 证件工具（真实号绝不上云的边界） |
 | `connectors/cred_ocr.py` | 证件本地 OCR（不上云） |
@@ -61,10 +69,22 @@
 | `core/history.py` | 对话存档业务规则 |
 | `core/workflow_registry.py` | 工作流注册/运行记录 |
 | `core/skill_policy.py` | 技能策略 |
+| `core/telemetry.py` | 执行遥测：工具调用画像/能力缺口日志 |
+| `core/capability.py` | 能力索引：四源聚合 + 词面检索 + 先查后建查重 |
+| `core/signals.py` | 监督信号打标：纠正/放弃/重试落库 |
+| `core/artifacts.py` | 产物登记表 + 图书馆视图 + 生命周期 |
+| `connectors/artifact_tools.py` | 产物图书馆工具 |
+| `connectors/capability_tools.py` | 能力索引工具 |
+| `connectors/spawn_tools.py` | 子 agent 派发工具（升权入口已被拿掉，无安全面） |
+| `connectors/consolidation_tools.py` | 记忆巩固触发工具（薄壳） |
+| `connectors/web_search.py` | 全局结构化搜索(AnySearch)+用量/降级；只读外部 |
+| `connectors/web_fetch.py` | 网页正文抓取(Crawl4AI)+降级；只读外部 |
 | `intel/` | 情报层：信号库、工作流定义、领域 prompt/规格 |
 | `prospecting/` | HubSpot 潜客匹配/富化流水线 |
 | `skills/` | 运行时自建技能（已沙箱） |
+| `sensors/` | 感官层采集器：只产出短读数值，经 world_state 汇聚（业务性质） |
 | `frontend/` | PWA 前端（注：无测试覆盖，自动迭代暂不应触碰） |
 
 ---
 未匹配任何条目的路径（如 `data/`、`deploy/`、`evals/`、新增文件）→ **默认 PROTECTED**。
+

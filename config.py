@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     # 绝不硬编码进源码——从 .env 读，避免随 git 泄露。
     feishu_app_id: str = ""
     feishu_app_secret: str = ""
+    # 主动推送（定时任务的文字/文件）的收件人 open_id。留空则自动用「最近一个
+    # 跟 jarvis 说过话的飞书用户」（单用户产品的合理默认，桥会把它记到数据目录）。
+    feishu_push_open_id: str = ""
+    # 官方 cardkit 流式（卡片实体 + 增量推文本，做原生打字机、免整卡重刷频率限制）。
+    # 默认关：需在真实飞书环境联调验证后再开；开启后任一步失败会自动降级回
+    # 「占位卡 + patch 整卡」的既有稳定流式（见 lark_bridge._stream_open）。
+    feishu_native_streaming: bool = False
 
     # 模型（OpenRouter 格式 provider/model-name；:online 启用内置联网）
     claude_model: str = "deepseek/deepseek-v4-flash:online"
@@ -80,7 +87,7 @@ class Settings(BaseSettings):
     # 常驻核心工具（仅在渐进披露开启时有意义；按工具名常驻、与组无关）。
     # 选取标准：任意对话里都可能随时需要的跨域工具——发文件、记长期事实、读文件、
     # 查两个保险箱（"我有哪些证件/保单"）。其余领域工具靠 load_tools 按需加载。
-    core_tool_names: str = "send_file_to_chat,remember_fact,read_document,list_credentials,list_documents"
+    core_tool_names: str = "send_file_to_chat,remember_fact,read_document,list_credentials,list_documents,web_search"
 
     # 服务绑定（默认仅本地回环；容器/公网部署用 JARVIS_HOST/JARVIS_PORT 覆盖）
     host: str = Field(default="127.0.0.1", validation_alias="JARVIS_HOST")
@@ -103,6 +110,13 @@ class Settings(BaseSettings):
     # 敏感度判定是否在硬规则之外再调轻模型做语义判断（关掉则仅靠关键词/内容特征，其余一律存疑）。
     sensitivity_llm: bool = Field(default=True, validation_alias="JARVIS_SENSITIVITY_LLM")
 
+    # AnySearch 结构化搜索（可选增强）：填 key 则 web_search 工具用它，
+    # 未填/超额/失败一律优雅退回模型自带 :online 联网。base_url 可覆盖以防端点变更。
+    anysearch_api_key: str = Field(default="", validation_alias="ANYSEARCH_API_KEY")
+    anysearch_base_url: str = Field(default="https://api.anysearch.com/v1/search",
+                                    validation_alias="ANYSEARCH_BASE_URL")
+    anysearch_daily_cap: int = Field(default=900, validation_alias="ANYSEARCH_DAILY_CAP")
+
 
 settings = Settings()
 
@@ -115,8 +129,14 @@ CLAUDE_MODEL_LIGHT  = settings.claude_model_light
 MEMORY_DB_PATH        = DATA_DIR / "memory.db"
 MEMORY_ENCRYPTION_KEY = settings.memory_encryption_key
 
-FEISHU_APP_ID     = settings.feishu_app_id
-FEISHU_APP_SECRET = settings.feishu_app_secret
+ANYSEARCH_API_KEY   = settings.anysearch_api_key
+ANYSEARCH_BASE_URL  = settings.anysearch_base_url
+ANYSEARCH_DAILY_CAP = settings.anysearch_daily_cap
+
+FEISHU_APP_ID       = settings.feishu_app_id
+FEISHU_APP_SECRET   = settings.feishu_app_secret
+FEISHU_PUSH_OPEN_ID = settings.feishu_push_open_id
+FEISHU_NATIVE_STREAMING = settings.feishu_native_streaming
 
 MAX_HISTORY_TURNS         = settings.max_history_turns
 MAX_TOKENS_RESPONSE       = settings.max_tokens_response

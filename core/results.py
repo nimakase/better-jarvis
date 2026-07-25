@@ -43,3 +43,27 @@ def file_download(file_path: str, filename: str, size: int) -> Action:
 
 def credential_reveal(alias: str, fields: list) -> Action:
     return Action("credential_reveal", {"alias": alias, "fields": fields})
+
+
+def present_options(text: str, options: list, title: str = "") -> Action:
+    """给用户一组可点击的选项（channel-agnostic）。
+
+    各渠道各自渲染：飞书→回传按钮卡；网页→可点按钮；后台→退化为纯文本。
+    options: [{label, intent, style?}]，intent = 点击后【当作用户消息重放】的话。
+    """
+    return Action("interactive", {
+        "mode": "options", "text": text, "options": options, "title": title,
+    })
+
+
+def present_form(text: str, fields: list, submit_label: str = "提交",
+                 submit_intent: str = "提交表单", title: str = "") -> Action:
+    """给用户一张结构化输入表单（channel-agnostic）。
+
+    fields: [{name, label, type?(input|textarea|select), options?, placeholder?}]
+    提交后各字段值会连同 submit_intent 合成一句用户消息回流对话。
+    """
+    return Action("interactive", {
+        "mode": "form", "text": text, "fields": fields,
+        "submit_label": submit_label, "submit_intent": submit_intent, "title": title,
+    })

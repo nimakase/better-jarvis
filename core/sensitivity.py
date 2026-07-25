@@ -98,8 +98,8 @@ _LLM_PROMPT = (
 
 async def _llm_classify(name: str, snippet: str = "") -> str:
     try:
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=config.OPENROUTER_API_KEY, base_url=config.OPENROUTER_BASE_URL)
+        from core.llm import get_client
+        client = get_client()   # 有界超时（core/llm 单一构建点）
         user = f"文件名：{name}"
         if snippet.strip():
             user += f"\n正文片段：{snippet[:500]}"

@@ -108,6 +108,14 @@ async def generate(type_id: str, **kwargs) -> dict:
     idx = _load_index()
     idx.insert(0, rec)
     _save_index(idx)
+    # 产物登记表 + 图书馆（core/artifacts）：报告是一等产物。失败不阻断生成。
+    try:
+        if rec.get("path"):
+            from core import artifacts as _artifacts
+            _artifacts.register(rec["path"], producer=f"report:{type_id}",
+                                kind="报告", label=rec["title"], state="kept")
+    except Exception:
+        pass
     return {"ok": True, "report": rec}
 
 
