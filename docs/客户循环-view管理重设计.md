@@ -26,17 +26,16 @@ HubSpot 公司层面**下线 priority(hot/warm/cold)字段**。Ned 仍需这套�
 
 ## 4. 状态模型 & view 清单
 
-**计数底座 = 联系人层**(Breeze 数据逐封带联系人 + 岗位,聚合几乎白捡,且消除"轮"的歧义):每联系人 → 收几封 / 是否回复 / 岗位。**一个联系人 3 封无回复 = 该联系人到顶(一轮)**。账户状态全部由此推导。另读账户**全部关联联系人**,算"还有几个没试过的";**岗位**让换人建议更准(如提示"还有个采购/决策角色没碰过")。换不换、换谁仍是 Ned 定,贾维斯只摊牌。
+**判定极简(2026-07-31 定):不数联系人/轮次**,只看两件事——有没有人回信、最后一封 outreach 离现在多久。联系人明细(谁发过几封、岗位、还剩谁没试过)照样从 Breeze 抽出来放进账户详情,供 Ned 换人时参考,但**不参与状态判定**。
 
 **Prospecting(无 deal)—— 冷开发流:**
 
-| view | 含义 | 动作 |
+| view | 判定 | 动作 |
 |---|---|---|
-| 未开发 | 无 outreach 记录 | 待启动第一轮 |
-| 开发中 | 有 sequence 在跑(HubSpot 自动发) | 不用管 |
-| 1 个联系人到顶·无回复 | 首个联系人 3 封没回 | 可发第 2 个(换不换/换谁 Ned 定,视图列已试/未试联系人+岗位) |
-| 到顶 | 2 个联系人各跑满 3 封、都无回复 | Ned 决策:挖新联系人 / 收手(视图标"还剩 N 个没试过") |
-| 已回复·待跟进 | 有人回信 | sequence 自动停;约了时间就建 Task,移出冷开发 |
+| 未开发 | 无 outreach 记录 | 去启动第一轮 |
+| 开发中 | 最后一封 outreach 在 14 天(ACTIVE_DAYS)内 | sequence 还在跑,不用管 |
+| 待处理·换人或放弃 | 有发过、最后一封 >14 天、且没人回 | **归一类**:Ned 定换人发 or 放弃 |
+| 已回复·待跟进 | 有联系人回信(优先级最高) | sequence 自动停;约了时间就建 Task |
 
 **Core(有 deal)—— 维护流,绝不冷开发:**
 
@@ -47,17 +46,15 @@ HubSpot 公司层面**下线 priority(hot/warm/cold)字段**。Ned 仍需这套�
 
 ## 5. 参数(已定)
 
-- 1 轮 = **3 封**同标题邮件
-- 轮 = **单个联系人**的 3 封;到顶 = **2 个联系人**各跑满 3 封、都无回复
-- Core 维护间隔 = **2 个月(60 天)**未 touch
-- 换联系人 = **不自动**,Ned 判断(贾维斯只报状态)
+- **ACTIVE_DAYS = 14**:最后一封 outreach 在 14 天内 = 开发中;超了 = 待处理。
+- Core 维护间隔 = **2 个月(60 天)**未 touch。
+- 换联系人 = **不自动**,Ned 判断(贾维斯只在账户详情摊出已试/未试联系人+岗位供参考)。
 
 ## 6. 待确认 / 风险
 
-1. ~~「轮」的口径~~ **已定**:轮 = 单个联系人的 3 封;计数落在联系人层,账户状态往上推(见 §4 计数底座),歧义消除。
-2. **名单法精度**:`contains exactly` 是子串 + 多值 OR,须用够独特的全名;值数量可能有上限(几百个 prospecting 时验)。`Record ID` 的 `is any of` 是否更精确,待验。Set values 后是否需额外点 Save 才持久化,待验。
-3. **贾维斯批量驱动 Breeze**:逐账户开 Copilot 问 + 解析 JSON;增量下量可控,冷启动慢、可分批。
-4. **store schema**:per-account `{contacts:[{name, job_title, 邮件数, 各封日期, 回复?}], 全部关联联系人名单, 到顶?, 维护 last_touch, 冷处理 flag}`。
+1. **名单法精度**:实盘用 `is equal to any of`(整名精确,已建议)比 `contains exactly`(子串,会误伤如 "Insta Elektro" 命中 "Insta Elektro GmbH")稳。值数量上限(几百 prospecting 时)待验。
+2. **贾维斯批量驱动 Breeze**:逐账户开 Copilot 问 + 解析 JSON;增量下量可控,冷启动慢、可分批。选择器 + 坑已实盘校准(见 breeze_outreach 顶部注释)。
+3. **store schema**:per-account `{state, view, last_outreach, days_since_last, tried_contacts[{name,job_title,n_sent,last,replied}], untouched_contacts, replied_contacts}`(见 outreach_state 返回)。
 
 ## 7. 分阶段落地建议
 

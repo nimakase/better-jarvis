@@ -93,14 +93,33 @@ def _dump(page, kw: str):
 
 def main() -> int:
     args = sys.argv[1:]
-    if not args or args[0] not in ("breeze", "view", "dump"):
+    if not args or args[0] not in ("breeze", "view", "dump", "cycle"):
         print('用法: python -m prospecting.view_pipeline_smoketest breeze "<账户名>"'
-              ' | view "<视图URL>" "<账户名>"... | dump breeze | dump view "<视图URL>"')
+              ' | view "<视图URL>" "<账户名>"... | dump breeze|view "<URL>"'
+              ' | cycle [apply] [limit=N]')
         return 5
 
     browser, paths, logger = _make_browser()
     browser = _start(browser)
     try:
+        if args[0] == "cycle":
+            from prospecting import view_manager
+            from prospecting.view_config import VIEW_URL_MAP
+            apply = "apply" in [a.lower() for a in args]
+            limit = None
+            for a in args[1:]:
+                if a.startswith("limit="):
+                    limit = int(a.split("=", 1)[1])
+            missing = [k for k, v in VIEW_URL_MAP.items() if not v]
+            if missing:
+                print("[cycle] ⚠ 未配 view URL 的段(会跳过):", missing, "→ 去 view_config.py 回填")
+            print(f"[cycle] {'APPLY 真写' if apply else 'dry-run 不改 view'}"
+                  f"{f' | limit={limit}' if limit else ''} …(逐账户 Breeze,较慢)")
+            res = view_manager.run_view_cycle(browser, VIEW_URL_MAP, apply=apply,
+                                              limit=limit, logger=logger)
+            print("结果:", res)
+            return 0
+
         if args[0] == "dump":
             sub = args[1] if len(args) > 1 else "breeze"
             page = browser.page

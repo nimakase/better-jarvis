@@ -80,36 +80,41 @@ out = view_writer.format_value_list(["A Corp", " A Corp ", "", "B Ltd", "a corp"
 check(out == "A Corp\nB Ltd", f"去重去空保序, got {out!r}")
 
 # ── outreach_store:存/取/按 view 汇总 ─────────────────────────
-outreach_store.upsert_account_state("Acme Inc", {"state": "at_limit", "view": "到顶"})
+outreach_store.upsert_account_state("Acme Inc", {"state": "pending", "view": "待处理·换人或放弃"})
 outreach_store.upsert_account_state("Beta LLC", {"state": "not_started", "view": "未开发"})
-outreach_store.upsert_account_state("Gamma Co", {"state": "at_limit", "view": "到顶"})
-check(outreach_store.get_account_state("acme inc")["view"] == "到顶", "按归一名取回")
+outreach_store.upsert_account_state("Gamma Co", {"state": "pending", "view": "待处理·换人或放弃"})
+check(outreach_store.get_account_state("acme inc")["view"] == "待处理·换人或放弃", "按归一名取回")
 by = outreach_store.accounts_by_view()
-check(sorted(by["到顶"]) == ["Acme Inc", "Gamma Co"], f"按 view 汇总, got {by.get('到顶')}")
+check(sorted(by["待处理·换人或放弃"]) == ["Acme Inc", "Gamma Co"], f"按 view 汇总, got {by.get('待处理·换人或放弃')}")
 check(by["未开发"] == ["Beta LLC"], "未开发段")
 
-# ── view_manager.compute_segments(假 breeze_ask + roster)──────
+# ── view_manager.compute_segments(假 breeze_ask + roster;简化状态)──
+from datetime import date as _date          # noqa: E402
+TODAY = _date(2025, 6, 1)
+
 def fake_ask(acct):
     data = {
-        "Acct至顶": [
-            {"name": "c1", "sent_dates": ["d1", "d2", "d3"], "replied": False},
-            {"name": "c2", "sent_dates": ["d1", "d2", "d3"], "replied": False},
+        "Acct待处理": [   # 最后一封 >14 天、没回
+            {"name": "c1", "sent_dates": ["2025-05-01"], "replied": False},
+            {"name": "c2", "sent_dates": ["2025-05-03"], "replied": False},
         ],
+        "Acct开发中": [{"name": "c1", "sent_dates": ["2025-05-28"], "replied": False}],  # 近期
         "Acct未开发": [],
-        "Acct回复": [{"name": "c1", "sent_dates": ["d1"], "replied": True}],
+        "Acct回复": [{"name": "c1", "sent_dates": ["2025-05-01"], "replied": True}],
     }
     return data.get(acct, [])
 
 def fake_roster(acct):
     return [{"name": "c1"}, {"name": "c2"}, {"name": "c3"}]  # c3 没试过
 
-segs = view_manager.compute_segments(["Acct至顶", "Acct未开发", "Acct回复"],
-                                     fake_ask, roster_of=fake_roster, persist=True)
-check("Acct至顶" in segs["到顶"], f"至顶归到顶, got {segs}")
+segs = view_manager.compute_segments(["Acct待处理", "Acct开发中", "Acct未开发", "Acct回复"],
+                                     fake_ask, roster_of=fake_roster, persist=True, today=TODAY)
+check("Acct待处理" in segs["待处理·换人或放弃"], f"待处理归位, got {segs}")
+check("Acct开发中" in segs["开发中"], "开发中归位")
 check("Acct未开发" in segs["未开发"], "未开发归位")
 check("Acct回复" in segs["已回复·待跟进"], "回复归位")
 # 持久化 + 未试联系人算对
-st = outreach_store.get_account_state("Acct至顶")
+st = outreach_store.get_account_state("Acct待处理")
 check(st["untouched_count"] == 1 and st["untouched_contacts"][0]["name"] == "c3", "未试 c3")
 
 # ── view_manager.apply_segments(假 view_write + url 映射)───────
@@ -118,9 +123,27 @@ def fake_write(url, names, apply):
     written[url] = (sorted(names), apply)
     return {"ok": True, "count": len(names), "applied": apply}
 
-url_map = {"到顶": "http://view/at_limit", "未开发": "http://view/new"}  # 没配"已回复"
+url_map = {"待处理·换人或放弃": "http://view/pending", "未开发": "http://view/new"}  # 没配"已回复"
 res = view_manager.apply_segments(segs, lambda v: url_map.get(v), fake_write, apply=True)
-check(res["到顶"]["ok"] and written["http://view/at_limit"][1] is True, "到顶写入")
+check(res["待处理·换人或放弃"]["ok"] and written["http://view/pending"][1] is True, "待处理写入")
 check(res["已回复·待跟进"]["ok"] is False and "未配置" in res["已回复·待跟进"]["reason"], "未配置 view 跳过并说明")
+
+# ── view_manager.split_accounts:按 deal 分 prospecting/core ────
+recs = [
+    {"account_name": "CoreCo", "num_associated_deals": 2, "num_open_deals": 0, "last_activity_date": "2025-03-01"},
+    {"account_name": "ProspectCo", "num_associated_deals": 0, "num_open_deals": 0, "last_engagement_date": "2025-05-20"},
+    {"account_name": "", "num_associated_deals": 0},   # 无名 → 跳过
+]
+pros, core = view_manager.split_accounts(recs)
+check(pros == ["ProspectCo"], f"prospecting 分对, got {pros}")
+check(len(core) == 1 and core[0]["name"] == "CoreCo" and core[0]["last_activity"] == "2025-03-01",
+      f"core 分对+带 last_activity, got {core}")
+
+# ── view_manager.core_maintenance_segment:>2月没 touch ─────────
+core3 = [{"name": "Old", "last_activity": "2025-03-01"},     # 3 月前 → 到点
+         {"name": "Fresh", "last_activity": "2025-05-25"},    # 7 天前 → 未到
+         {"name": "Never", "last_activity": None}]            # 从没 → 到点
+due = view_manager.core_maintenance_segment(core3, today=TODAY)
+check(sorted(due) == ["Never", "Old"], f"维护到点分对, got {due}")
 
 print("✅ test_view_pipeline 全部通过")

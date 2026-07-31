@@ -1,11 +1,17 @@
 """prospecting/outreach_state.py — 冷开发状态判定(纯逻辑,零依赖、可单测)。
 
-设计见 docs/客户循环-view管理重设计.md。计数底座 = 联系人层:
-  - 一个联系人连发 3 封同标题邮件、无回复 = 该联系人到顶(一轮)。
-  - 账户状态由各联系人状态往上推;换不换联系人由 Ned 决定,这里只摊牌。
+设计见 docs/客户循环-view管理重设计.md。【简化版】不数联系人/轮次,只看两件事:
+  - 有没有人回信;
+  - 最后一封 outreach 离现在多久(还在发 vs 已停)。
 
-输入来自 Breeze 抽取(逐联系人 outreach)+ HubSpot 账户关联的全部联系人名单。
-本模块【只算】,不读 HubSpot、不问 Breeze、不写 view。
+状态(4 个):
+  未开发   —— 从没发过 outreach
+  开发中   —— 最后一封 outreach 在 ACTIVE_DAYS 天内(sequence 还在跑,别管)
+  待处理   —— 有发过、但最后一封超过 ACTIVE_DAYS 且没人回 → 归一类:换人发 or 放弃(Ned 定)
+  已回复   —— 有联系人回过信 → 建 Task 跟进(优先级最高)
+
+联系人明细(谁发过几封、岗位、未试过谁)照样算出来放进结果,供 Ned 换人时参考,但【不参与状态判定】。
+本模块只算,不读 HubSpot、不问 Breeze、不写 view。
 """
 from __future__ import annotations
 
@@ -14,18 +20,15 @@ from typing import Optional
 
 from prospecting.account_grading import _to_date  # 复用日期解析(纯函数)
 
-# ── 旋钮(与设计文档一致)──────────────────────────────────────
-ROUND_SIZE = 3            # 一轮 = 给一个联系人连发几封
-LIMIT_CONTACTS = 2        # 到顶 = 有几个联系人各跑满一轮且无回复
+# ── 旋钮 ──────────────────────────────────────────────────────
+ACTIVE_DAYS = 14          # 最后一封 outreach 在此天数内 → 还在发(开发中);超了 → 待处理
 CORE_MAINTAIN_DAYS = 60   # core 距上次 touch 超过这个天数 → 维护到点(2 个月)
 
-# 账户冷开发状态 → 中文 view 名(prospecting 流)
 VIEW_NAME = {
     "replied": "已回复·待跟进",
     "not_started": "未开发",
     "in_progress": "开发中",
-    "one_done": "1联系人到顶·可发第2个",
-    "at_limit": "到顶",
+    "pending": "待处理·换人或放弃",
 }
 
 
@@ -33,66 +36,52 @@ def _norm_name(s) -> str:
     return " ".join(str(s or "").split()).strip().lower()
 
 
-def _n_sent(sent_dates) -> int:
-    return sum(1 for d in (sent_dates or []) if d)
+def _dates(sent_dates) -> list:
+    return sorted(d for d in (_to_date(x) for x in (sent_dates or [])) if d)
 
 
-def contact_state(sent_dates, replied: bool) -> str:
-    """单个联系人的状态。replied > exhausted(≥3封无回复) > in_progress(1-2封) > none。"""
-    if replied:
-        return "replied"
-    n = _n_sent(sent_dates)
-    if n >= ROUND_SIZE:
-        return "exhausted"
-    if n >= 1:
-        return "in_progress"
-    return "none"
+def account_outreach_state(contacts: list, all_contacts: Optional[list] = None,
+                           today: Optional[date] = None) -> dict:
+    """算某 prospecting 账户的冷开发状态(简化版)。
 
+    contacts:     [{"name","job_title","sent_dates":[ISO...],"replied":bool}] —— Breeze 抽的。
+    all_contacts: [{"name","job_title"}] —— 账户全部关联联系人(算"还剩谁没试过",供换人参考)。可空。
+    today:        判定基准日;默认今天(UTC)。
+    返回 {state, view, last_outreach, days_since_last, replied_contacts, tried_contacts, untouched_*}。
 
-def account_outreach_state(contacts: list, all_contacts: Optional[list] = None) -> dict:
-    """算某 prospecting 账户的冷开发状态。
-
-    contacts:     [{"name","job_title","sent_dates":[ISO...],"replied":bool}] —— Breeze 抽的、Ned 发过信的联系人。
-    all_contacts: [{"name","job_title"}] —— 账户在 HubSpot 关联的全部联系人(算"还剩几个没试过")。可空。
-    返回 {state, view, exhausted_count, tried_contacts, untouched_contacts, ...}。
-
-    优先级:有人回信 > 未开发 > 开发中(还有 sequence 在跑) > 到顶(≥2 联系人跑满无回复) > 1 联系人到顶。
+    优先级:有人回信 > 从没发过 > 最后一封在 14 天内(开发中)> 否则待处理。
     """
-    states = [(c, contact_state(c.get("sent_dates"), bool(c.get("replied")))) for c in (contacts or [])]
-    replied = [c for c, s in states if s == "replied"]
-    exhausted = [c for c, s in states if s == "exhausted"]
-    in_progress = [c for c, s in states if s == "in_progress"]
+    today = today or datetime.now(timezone.utc).date()
+    replied = [c.get("name") for c in (contacts or []) if c.get("replied")]
+
+    tried, all_dates = [], []
+    for c in (contacts or []):
+        ds = _dates(c.get("sent_dates"))
+        all_dates += ds
+        tried.append({"name": c.get("name"), "job_title": c.get("job_title"),
+                      "n_sent": len(ds), "last": ds[-1].isoformat() if ds else None,
+                      "replied": bool(c.get("replied"))})
 
     if replied:
         state = "replied"
-    elif not states:
+    elif not all_dates:
         state = "not_started"
-    elif in_progress:
-        state = "in_progress"          # 还有联系人在跑 sequence(HubSpot 自动发)→ 先别管
-    elif len(exhausted) >= LIMIT_CONTACTS:
-        state = "at_limit"
-    elif len(exhausted) >= 1:
-        state = "one_done"
     else:
-        state = "not_started"
+        last = max(all_dates)
+        state = "in_progress" if (today - last).days <= ACTIVE_DAYS else "pending"
 
-    emailed = {_norm_name(c.get("name")) for c, _ in states if c.get("name")}
-    untouched = []
-    for c in (all_contacts or []):
-        if _norm_name(c.get("name")) not in emailed:
-            untouched.append({"name": c.get("name"), "job_title": c.get("job_title")})
+    last_out = max(all_dates) if all_dates else None
+    emailed = {_norm_name(c.get("name")) for c in (contacts or []) if c.get("name")}
+    untouched = [{"name": c.get("name"), "job_title": c.get("job_title")}
+                 for c in (all_contacts or []) if _norm_name(c.get("name")) not in emailed]
 
     return {
         "state": state,
         "view": VIEW_NAME[state],
-        "exhausted_count": len(exhausted),
-        "in_progress_count": len(in_progress),
-        "replied_contacts": [c.get("name") for c in replied],
-        "tried_contacts": [
-            {"name": c.get("name"), "job_title": c.get("job_title"),
-             "n_sent": _n_sent(c.get("sent_dates")), "state": s}
-            for c, s in states
-        ],
+        "last_outreach": last_out.isoformat() if last_out else None,
+        "days_since_last": (today - last_out).days if last_out else None,
+        "replied_contacts": replied,
+        "tried_contacts": tried,          # 明细(供换人参考,不参与判定)
         "untouched_contacts": untouched,
         "untouched_count": len(untouched),
     }
