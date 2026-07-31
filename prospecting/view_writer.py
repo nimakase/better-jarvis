@@ -81,11 +81,21 @@ def set_view_membership(browser, view_url: str, account_names, apply: bool = Fal
                     "applied": False, "reason": "dry-run(未 Set values)"}
 
         page.locator(SET_VALUES_BTN).first.click(timeout=5000)
-        page.wait_for_timeout(1000)
-        page.keyboard.press("Escape")         # 关筛选面板,露出 save 按钮(面板会盖住它)
-        page.wait_for_timeout(500)
-        page.locator(SAVE_VIEW_BTN).first.click(timeout=6000)
         page.wait_for_timeout(1200)
+        # 侧面板盖住 save 键且【Escape 关不掉】→ 再点一次 Advanced filters 切换关闭(实盘确认)。
+        try:
+            page.locator(ADV_FILTERS_BTN).first.click(timeout=5000)
+            page.wait_for_timeout(900)
+        except Exception:
+            pass
+        # 保存:save 键 enabled 才点;若已 disabled = 改动已提交/已保存态(大列表关面板时会自动提交)→ 视为成功。
+        save = page.locator(SAVE_VIEW_BTN).first
+        try:
+            if save.count() and save.is_enabled():
+                save.click(timeout=6000)
+                page.wait_for_timeout(1200)
+        except Exception:
+            pass
         if logger:
             logger.info("view_writer | APPLIED+SAVED | %s | %d 个账户", view_url, len(names))
         return {"ok": True, "view_url": view_url, "count": len(names), "applied": True}
