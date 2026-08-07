@@ -77,6 +77,33 @@ async def _run_fanout_detached(task_id: str, tasks: list, label: str) -> None:
         _RUNNING.pop(task_id, None)
 
 
+async def _run_document_fanout_detached(task_id: str, path: str, task_template: str,
+                                        chunk_chars: int, label: str) -> None:
+    try:
+        from connectors.document import _extract_document_text
+        from core import chunking
+
+        ok, text = await _extract_document_text(path)
+        if not ok:
+            _deliver_result(task_id, f"大文档任务『{label}』失败", f"读取文档失败：{text}", ok=False)
+            return
+        chunks = chunking.chunk_text(text, chunk_chars=chunk_chars)
+        if not chunks:
+            _deliver_result(task_id, f"大文档任务『{label}』失败", "文档提取出的内容为空", ok=False)
+            return
+        results = await chunking.fanout_over_chunks(
+            task_template, text, chunk_chars=chunk_chars, label=label)
+        content = (f"共切成 {len(chunks)} 块，逐块结果如下（原文顺序）：\n\n"
+                   + "\n\n".join(f"【第{i + 1}块】\n{r.brief()}" for i, r in enumerate(results)))
+        ok_all = all(r.ok for r in results)
+        _deliver_result(task_id, f"大文档任务『{label}』完成（{len(chunks)} 块）", content, ok=ok_all)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("大文档分块任务异常：%s", task_id)
+        _deliver_result(task_id, f"大文档任务『{label}』失败", f"运行异常：{e}", ok=False)
+    finally:
+        _RUNNING.pop(task_id, None)
+
+
 @tool(
     "spawn_subtask",
     "把一个需要多轮查询/阅读的重活派给隔离的子 agent 在【后台】完成，不占用当前对话——"
@@ -134,6 +161,44 @@ async def spawn_fanout(tasks: list, label: str = "") -> str:
     t.add_done_callback(lambda fut: fut.exception())
     return (f"已派发『{label}』（id: {task_id}，共 {len(tasks)} 项），在后台并发跑，"
             f"全部跑完我会把汇总结果推送给你，期间可以继续聊别的。")
+
+
+@tool(
+    "process_large_document",
+    "任务体量太大的标准安全解法（任务 #15）——当 read_document 提示文档被截断、而你的"
+    "任务需要处理【全文】（如翻译整份文档、逐段摘要、全文核对）时用这个，不要凭截断内容"
+    "硬做，更不要自己发明变通方法（比如尝试调用/安装其它程序）。会在服务端把全文自动"
+    "切块、并发派多个只读子agent并行处理，跑完把每块结果汇总推送给你——调用后立刻返回"
+    "『已派发』，可以继续聊别的。task_template 是你希望对【每一块】执行的指令，必须包含"
+    "占位符 {chunk}（会被替换成该块的实际文本），例如："
+    "\"阅读以下文本片段并翻译成中文，只输出译文：\\n\\n{chunk}\"。",
+    {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "文档完整路径"},
+            "task_template": {"type": "string",
+                              "description": "对每一块执行的指令模板，必须包含 {chunk} 占位符"},
+            "chunk_chars": {"type": "integer", "description": "每块的目标字符数，默认 12000"},
+            "label": {"type": "string", "description": "这个大文档任务的短标签，如「XX报告全文翻译」"},
+        },
+        "required": ["path", "task_template"],
+    },
+    effect=effects.READ_EXTERNAL,
+)
+async def process_large_document(path: str, task_template: str, chunk_chars: int = 12000,
+                                 label: str = "") -> str:
+    if "{chunk}" not in task_template:
+        return "task_template 必须包含 {chunk} 占位符（会被替换成每一块的实际文本），请修正后重调。"
+    label = label or f"大文档处理:{path.split('/')[-1]}"
+    task_id = _new_task_id(label)
+    _RUNNING[task_id] = {"label": label, "kind": "document_fanout",
+                         "started_at": datetime.now(timezone.utc).isoformat()}
+    t = asyncio.create_task(_run_document_fanout_detached(
+        task_id, path, task_template, max(1000, int(chunk_chars or 12000)), label))
+    t.add_done_callback(lambda fut: fut.exception())
+    return (f"已派发『{label}』（id: {task_id}），会先读取全文再自动分块并发处理，"
+            f"预计几十秒到数分钟（取决于文档大小），跑完我会把逐块结果汇总推送给你，"
+            f"期间可以继续聊别的。")
 
 
 @tool(

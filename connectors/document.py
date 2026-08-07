@@ -313,29 +313,31 @@ async def _handle_pdf(path: str, pages: str, cloud: str) -> str:
         "required": ["path"],
     },
 )
-async def read_document(path: str, pages: str = "", sheet: str = "", cloud: str = "auto") -> str:
-    """
-    读取文档并返回文本内容。
-    path:  文件的完整路径
-    pages: 仅 PDF 有效，指定页码，如 "1-5" 或 "1,3,5"，留空=全部
-    sheet: 仅 XLSX 有效，指定 Sheet 名称，留空=所有 Sheet
-    cloud: 仅 PDF 有效，云端 OCR 授权：auto/allow/deny
-    """
+async def _extract_document_text(path: str, pages: str = "", sheet: str = "",
+                                 cloud: str = "auto") -> tuple[bool, str]:
+    """真正的提取逻辑（不截断）。返回 (ok, text_or_error)：
+    ok=True  → text 是【完整未截断】的提取文本；
+    ok=False → text 是给用户看的错误/提示文案。
+
+    拆出来（2026-08-08，任务 #15）是因为 read_document() 要截断（保护主对话
+    上下文），但 core.chunking 驱动的大文档分块处理（connectors/spawn_tools.py 的
+    process_large_document）恰恰需要【完整原文】才能正确切块——两处不该有两份
+    不同步的格式解析逻辑，这里是唯一事实来源。"""
     path = path.strip().strip('"').strip("'")
 
     if not os.path.exists(path):
-        return f"文件不存在：{path}\n请确认路径正确（Windows 路径示例：C:/Users/Ned/Desktop/文件.pdf）"
+        return False, f"文件不存在：{path}\n请确认路径正确（Windows 路径示例：C:/Users/Ned/Desktop/文件.pdf）"
 
     ext = Path(path).suffix.lower()
     file_size_mb = os.path.getsize(path) / 1024 / 1024
 
     if file_size_mb > 50:
-        return f"文件过大（{file_size_mb:.1f} MB），超过 50MB 限制，请提供更小的文件或指定具体页码范围。"
+        return False, f"文件过大（{file_size_mb:.1f} MB），超过 50MB 限制，请提供更小的文件或指定具体页码范围。"
 
     try:
         if ext == ".pdf":
             # 本地优先 + 扫描件云端兜底（按敏感度）——决策全在 _handle_pdf 里
-            return _truncate(await _handle_pdf(path, pages, (cloud or "auto").lower()), path)
+            text = await _handle_pdf(path, pages, (cloud or "auto").lower())
         elif ext in (".docx", ".doc"):
             text = _read_docx(path)
         elif ext in (".xlsx", ".xls", ".xlsm"):
@@ -349,7 +351,7 @@ async def read_document(path: str, pages: str = "", sheet: str = "", cloud: str 
         elif ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
             text = await _read_image(path)
         else:
-            return (
+            return False, (
                 f"不支持的文件格式：{ext}\n"
                 f"支持的格式：PDF、DOCX、XLSX、PPTX、CSV、TXT、MD、JPG、PNG 等图片"
             )
@@ -357,16 +359,37 @@ async def read_document(path: str, pages: str = "", sheet: str = "", cloud: str 
         # 空提取兜底：docx/pptx/xlsx 等若几乎没抽到有效文字（可能是纯图片文档/空文件），
         # 明确报错而不是返回一个空壳让模型误以为读到了内容。
         if _meaningful_len(text) < 8:
-            return (
+            return False, (
                 f"⚠️ 该文件几乎没有可提取的文字内容：{path}\n"
                 "可能是纯图片文档、空文件，或内容以图片/图形形式存在（无文字层）。"
                 "如果是图片扫描件，请转成图片再让我做视觉识别，或提供含文字的版本。"
             )
 
-        return _truncate(text, path)
+        return True, text
 
     except ImportError as e:
         pkg = str(e).split("'")[1] if "'" in str(e) else str(e)
-        return f"缺少依赖库 {pkg}，请运行：pip install {pkg}"
+        return False, f"缺少依赖库 {pkg}，请运行：pip install {pkg}"
     except Exception as e:
-        return f"读取文件出错：{type(e).__name__}: {e}"
+        return False, f"读取文件出错：{type(e).__name__}: {e}"
+
+
+async def read_document(path: str, pages: str = "", sheet: str = "", cloud: str = "auto") -> str:
+    """
+    读取文档并返回文本内容。
+    path:  文件的完整路径
+    pages: 仅 PDF 有效，指定页码，如 "1-5" 或 "1,3,5"，留空=全部
+    sheet: 仅 XLSX 有效，指定 Sheet 名称，留空=所有 Sheet
+    cloud: 仅 PDF 有效，云端 OCR 授权：auto/allow/deny
+    """
+    ok, text = await _extract_document_text(path, pages, sheet, cloud)
+    if not ok:
+        return text
+    truncated = _truncate(text, path)
+    if truncated != text:
+        truncated += (
+            "\n\n[提示：文档太大被截断了。如果你的任务需要通读/处理【全文】（如翻译整份文档、"
+            "逐段摘要），不要只基于这段截断内容硬做——改用 process_large_document 工具，"
+            "它会在服务端把全文自动分块、并发派子agent处理，不受这里的截断限制。]"
+        )
+    return truncated
