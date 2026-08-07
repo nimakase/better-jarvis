@@ -101,6 +101,19 @@ def gather() -> list[dict]:
     except Exception:
         pass
 
+    # 5) 已发现的 MCP 工具（只读缓存快照，不在这里触发新连接——零配置时天然为空，
+    #    对现有查重行为零影响；见 core/mcp_discovery.py 任务 #6）
+    try:
+        from core import mcp_discovery
+        for server, result in mcp_discovery.cached_snapshot().items():
+            if not result.get("ok"):
+                continue
+            for t in result.get("tools", []):
+                out.append({"kind": "mcp_tool(未接入)", "name": f"{server}.{t['name']}",
+                            "description": t.get("description", "")})
+    except Exception:
+        pass
+
     return out
 
 

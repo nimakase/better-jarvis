@@ -31,6 +31,9 @@ class ToolSpec:
     origin: str = "builtin"  # "builtin"=第一方(连接器/元工具) | "skill"=运行时自建技能
     effect: str = ""         # 动作效应等级（见 core/effects.LEVELS）；空=未声明，
                              # 由 effects.effect_of() 按内置表/默认值兜底
+    timeout_s: "float | None" = 0  # 强制超时秒数（见 core/tool_timeout.py）；
+                             # 0=未声明，由 timeout_of() 按内置表/15s 默认值兜底；
+                             # None=显式声明"不设超时"（极少数，需慎用）
 
 
 # 注册表：name -> ToolSpec；_order 保留注册顺序（影响呈现给模型的顺序）
@@ -112,7 +115,7 @@ def unregister(name: str) -> bool:
 
 
 def tool(name: str, description: str, input_schema: Optional[dict] = None,
-         group: str = "general", effect: str = ""):
+         group: str = "general", effect: str = "", duration: str = ""):
     """装饰器：把一个（async）函数声明为工具并注册。
 
     用法：
@@ -123,8 +126,17 @@ def tool(name: str, description: str, input_schema: Optional[dict] = None,
     不改变现有披露行为；为将来按组渐进披露铺路。
     effect：动作效应等级（core/effects.LEVELS 之一）。空=未声明，
     由 effects 模块的内置表/默认值兜底。新工具建议显式声明。
+    duration：耗时分类标签（core/tool_timeout.FAST/SLOW/UNBOUNDED 之一）。
+    空=未声明，由 tool_timeout 模块的内置表/15s 默认值兜底。预期比 15s 默认值
+    慢的新工具（联网调用、OCR、多步生成……）建议显式声明 duration="slow"；
+    预期会长时间跑（分钟级）的活，第一反应应该是改造成 spawn_subtask 派发到
+    后台，而不是声明 duration="unbounded"。
     """
     def deco(fn: Callable) -> Callable:
+        timeout_s: "float | None" = 0
+        if duration:
+            from core.tool_timeout import _TAG_SECONDS
+            timeout_s = _TAG_SECONDS.get(duration, 0)
         register_spec(ToolSpec(
             name=name,
             description=description,
@@ -132,6 +144,7 @@ def tool(name: str, description: str, input_schema: Optional[dict] = None,
             handler=fn,
             group=group,
             effect=effect,
+            timeout_s=timeout_s,
         ))
         return fn
     return deco

@@ -23,6 +23,7 @@ lark-oapi>=1.4.0        # 飞书长连接实时通道（lark_bridge.py；未填�
 # —— 可选增强（不装也能跑，装了自动升级；见对应连接器的降级逻辑）——
 # instructor>=1.0.0     # core/structured.py：结构化输出 schema 校验+重试（未装退回 json_salvage）
 # crawl4ai>=0.4.0       # connectors/web_fetch.py：高质量网页抓取（未装退回 httpx 基础抓取）；装后需 crawl4ai-setup 下浏览器内核
+# mcp>=2.0.0            # core/mcp_discovery.py：MCP server 工具发现（未装/未配置 mcp_servers.json 则相关工具如实报告"不可用"，不影响其余功能）
 # opencv-python / numpy 由 connectors/cred_ocr.py 直接 import；随 rapidocr-onnxruntime 传递安装，如需单独使用 OCR 模块可显式装：
 # opencv-python>=4.5.1.48
 # numpy>=1.19.5

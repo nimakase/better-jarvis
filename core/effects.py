@@ -12,9 +12,15 @@ core/effects.py — 动作效应模型（运行时护栏 · 第一层）
     write_external 对外产生影响（发消息、发邮件、推送）
     irreversible   不可逆（删除数据/文件/工具/日程）
 
-第一刀只机械拦 irreversible：模型调用不可逆工具时，第一次会被物理拦下，
-必须经过【至少一个用户回合】（用户看到并回话）后重调同名同参才放行。
-此前这条规则只写在 system prompt 的自然语言里（模型可忽略）；现在落进代码。
+机械拦截 write_external 及以上（即 write_external + irreversible）：模型调用这
+两级工具时，第一次会被物理拦下，必须经过【至少一个用户回合】（用户看到并回话）
+后重调同名同参才放行。
+
+2026-08-07 收敛：此前只拦 irreversible，write_external（如 run_workflow 这类
+"会打开浏览器/连外部系统"的工作流触发）只靠 system prompt 里的自然语言纪律
+（"跑前先告知并确认"）——模型判断错了没有硬闸能拦。这条纪律现在跟 irreversible
+走同一套机械闸，不再是"能跑demo"和"敢让它自主跑一整天"之间那道全靠模型自觉
+的缝。此前这条规则只写在 system prompt 的自然语言里（模型可忽略）；现在落进代码。
 
 分级来源（优先级从高到低）：
     1. ToolSpec.effect —— 工具注册时自带声明；
@@ -132,19 +138,23 @@ def at_least(effect: str, floor: str) -> bool:
 # ── 确认闸（irreversible 的机械拦截）──────────────────────────────────────────
 
 CONFIRM_MESSAGE = (
-    "⛔ 该操作不可逆（{effect}），已被安全闸拦下，本次【未执行】。\n"
+    "⛔ 该操作{kind}（{effect}），已被安全闸拦下，本次【未执行】。\n"
     "请向用户用一句话复述你将要执行的具体动作和对象，等用户明确确认。\n"
     "用户确认后，再次以【完全相同的参数】调用本工具即可执行。\n"
     "若用户拒绝或改主意，不要重调。"
 )
 
+# 门槛：达到此等级（含）以上的动作都要过确认闸。write_external 起步——
+# 覆盖"对外产生影响"和"不可逆"两级，不再只拦最重的那一级。
+CONFIRM_GATE_FLOOR = WRITE_EXTERNAL
+
 
 class ConfirmGate:
-    """不可逆动作的「隔一个用户回合」确认闸。
+    """对外有影响/不可逆动作的「隔一个用户回合」确认闸。
 
-    机械保证：一个 irreversible 调用要执行，必须满足——
-      同名同参的调用在【上一个用户回合之前】被拦过一次，
-      即用户至少有一次看到复述并回话的机会。
+    机械保证：一个 ≥ CONFIRM_GATE_FLOOR（write_external 及以上）的调用要执行，
+    必须满足——同名同参的调用在【上一个用户回合之前】被拦过一次，
+    即用户至少有一次看到复述并回话的机会。
 
     状态迁移（每个 (tool, args) 键）：
       首次调用 → 拦下，进 pending；
@@ -164,13 +174,14 @@ class ConfirmGate:
         self._pending, self._granted = set(), self._pending
 
     def check(self, tool_name: str, args_json: str) -> tuple[bool, str]:
-        """返回 (是否放行, 拦截时给模型看的话)。非 irreversible 一律放行。"""
+        """返回 (是否放行, 拦截时给模型看的话)。低于门槛的一律放行。"""
         eff = effect_of(tool_name)
-        if eff != IRREVERSIBLE:
+        if not at_least(eff, CONFIRM_GATE_FLOOR):
             return True, ""
         key = (tool_name, args_json or "")
         if key in self._granted:
             self._granted.discard(key)  # 一次性票据
             return True, ""
         self._pending.add(key)
-        return False, CONFIRM_MESSAGE.format(effect=eff)
+        kind = "不可逆" if eff == IRREVERSIBLE else "会对外产生影响"
+        return False, CONFIRM_MESSAGE.format(effect=eff, kind=kind)

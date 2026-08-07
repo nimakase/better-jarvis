@@ -33,6 +33,9 @@ import time as _time
 import config
 from core import effects as _effects
 from core import profile
+from core import group_memory as _group_memory
+from core import model_capabilities as _model_capabilities
+from core import tool_timeout as _tool_timeout
 from core import registry
 from core import signals as _signals
 from core import telemetry as _telemetry
@@ -109,6 +112,22 @@ FIXED_SYSTEM_PROMPT = """你是贾维斯，Ned 的个人 AI 助理。你的职�
 """
 
 
+# 能力边界与求助纪律（2026-07-25 收敛哲学落地）：把"何时自己上、何时停下交接"
+# 从口头共识变成 prompt 里的硬规则。升级路径 = 停下 + 交接给 Ned（他手动开 Claude
+# 接手），【不是】自动 spawn。每轮无条件注入（见 _build_system_prompt）。
+ESCALATION_POLICY = """【能力边界与求助纪律】
+- 日常事务大胆自主、别畏手畏脚：对话、查记忆、读文档、管日程、跑已有工作流、造简单
+  自包含的工具——直接做，不必事事请示。
+- 但遇到下列情形，【停下、别硬上】，产出一份交接简报交给 Ned（他会开更强的 agent 如
+  Claude 接手）：① 复杂代码 / 大重构 / 新架构 / 改动牵动多个模块；② 碰安全边界或需要
+  改 PROTECTED 核心文件；③ 机械信号触发：命中卡循环检测、能力索引里已记过这条缺口、
+  自建工具子进程冒烟连续失败。
+- 交接简报必须含四段：我想达成什么 / 我已试了什么及结果 / 我判断的根因 / 需要更强的
+  agent 具体做什么。宁可停早一点，也不要产出"看着成功、其实是错的"的半成品。
+- 注意：spawn 子 agent 是我自己拆并行子任务用的（有界、只读扇出），【不是】用来绕过
+  "这活我不该独自干"——难活的出口是交接给 Ned，不是 spawn。"""
+
+
 # 仅在渐进披露开启时追加：告诉模型如何按需加载领域工具。关闭时此段不出现，
 # 默认 system prompt 与历史完全一致。
 PROGRESSIVE_PROMPT_NOTE = """【工具按需加载】
@@ -119,25 +138,44 @@ load_tools(group="领域名") 加载该组；下一轮你即可看到并调用�
 
 
 def _network_capability_note() -> str:
-    """据当前模型是否带 :online（OpenRouter 联网插件）告诉模型它能否联网。
-    模型不会凭空知道自己的运行配置，必须显式说明，否则它会错误地拒绝/假装联网。"""
-    if ":online" in config.CLAUDE_MODEL:
-        return ("【联网能力】你当前已接入实时联网检索（OpenRouter :online）。"
-                "需要最新信息（新闻、行情、近期事件、网页内容）时可以直接作答，"
-                "并尽量注明信息可能的时效；不要声称自己无法上网。")
-    return ("【联网能力】你当前【没有】实时联网能力，只能基于已有知识和被调用工具"
-            "返回的数据作答。涉及最新/实时信息时，明确说明你无法联网核实，不要编造。")
+    """据当前模型的能力声明（core/model_capabilities）告诉它能否联网、能否读图。
+    模型不会凭空知道自己的运行配置，必须显式说明，否则它会错误地拒绝/假装联网。
+
+    2026-08-07：从"一条写死判断 :online"改为查 core/model_capabilities 的声明式
+    能力表——DeepSeek 官方 API 没有 :online 语法，但已原生支持视觉，靠字符串
+    匹配单一标记撑不住多种能力，改成一处可维护的表。"""
+    caps = _model_capabilities.capabilities_of(config.CLAUDE_MODEL)
+    if caps.online_search:
+        parts = ["【联网能力】你当前已接入实时联网检索。"
+                 "需要最新信息（新闻、行情、近期事件、网页内容）时可以直接作答，"
+                 "并尽量注明信息可能的时效；不要声称自己无法上网。"]
+    else:
+        parts = ["【联网能力】你当前【没有】实时联网能力，只能基于已有知识和被调用工具"
+                 "返回的数据作答。涉及最新/实时信息时，明确说明你无法联网核实，不要编造。"]
+    if caps.vision:
+        parts.append("【视觉能力】你当前的模型支持图片输入，可以直接看用户发来的图片作答。")
+    return " ".join(parts)
 
 
-def _build_system_prompt() -> str:
+def _build_system_prompt(active_groups: "set[str] | frozenset[str]" = frozenset()) -> str:
     now = datetime.now().strftime("现在是 %Y年%m月%d日 %H:%M，%A")
-    parts = [FIXED_SYSTEM_PROMPT, f"【当前时间】{now}", _network_capability_note()]
+    parts = [FIXED_SYSTEM_PROMPT, f"【当前时间】{now}", _network_capability_note(),
+             ESCALATION_POLICY]
     if config.PROGRESSIVE_TOOLS:
         parts.append(PROGRESSIVE_PROMPT_NOTE)
     # 常驻用户档案（core memory）：少量长期硬事实，每轮注入，跨会话钉住不淡化
     block = profile.build_block()
     if block:
         parts.append(block)
+    # 组作用域记忆（2026-08-07 新增）：只在对应工具组本轮已加载时才附带该组专属
+    # 业务笔记（如 HubSpot 报价规则），不常驻、不污染跟该组无关的对话。
+    for _g in sorted(active_groups):
+        try:
+            gb = _group_memory.build_block(_g)
+        except Exception:
+            gb = ""
+        if gb:
+            parts.append(gb)
     # 近期日程（内置日历，时间真源）：将到事件 + 休假 + 临近到期 + 今日定时，每轮注入
     cal_block = _calendar.build_block()
     if cal_block:
@@ -294,8 +332,18 @@ async def _execute_tool(name: str, inputs: dict, session: str = "interactive") -
         # 遥测（core/telemetry）：记录成败与耗时，喂 self_review/能力画像。绝不阻断。
         t0 = _time.perf_counter()
         ok, err = True, ""
+        # 强制超时（core/tool_timeout，任务 #14）：没有任何工具该无限期占住主线——
+        # 卡住的工具此前会冻住整条对话；耗时分类见 core/tool_timeout.py。
+        timeout_s = _tool_timeout.timeout_of(name)
         try:
-            raw = await _safe_call(handler, **inputs)
+            if timeout_s is None:
+                raw = await _safe_call(handler, **inputs)
+            else:
+                raw = await asyncio.wait_for(_safe_call(handler, **inputs), timeout=timeout_s)
+        except (asyncio.TimeoutError, TimeoutError):
+            ok, err = False, "timeout"
+            raw = (f"⏱️ 工具 {name} 执行超过 {timeout_s:g} 秒未返回，已放弃等待（本次未获得结果）。"
+                   "如果这类操作本来就需要更久，建议改用 spawn_subtask 派发到后台，而不是同步等它。")
         except Exception as e:
             ok, err = False, f"{type(e).__name__}: {e}"
             raw = f"工具 {name} 执行出错：{e}"
@@ -460,7 +508,7 @@ class JarvisController:
         self.messages = await _compress_history(self.client, self.messages, persist=self.interactive)
         self.messages.append({"role": "user", "content": user_message})
 
-        system = _build_system_prompt()
+        system = _build_system_prompt(self.active_groups)
         # 自我处境注入（⑩㉒）：本机感官读数 + 渠道能力画像。任何失败零影响。
         try:
             from core import channels as _channels

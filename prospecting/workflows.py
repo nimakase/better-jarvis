@@ -379,22 +379,35 @@ def make_llm_generate_fn(prompt_path: str | Path):
     """返回 generate_fn(node)：跑一次生成提示词，解析出富候选 JSON。
 
     走【直连模型调用】而不是 JarvisController——与 signal_collection 同构：
-    这一步不需要工具循环，只要一次带 :online 的文本补全（联网检索由模型内建）。
-    直连的好处是能给自己的 max_tokens 预算，不受通用对话护栏限制，也不必
-    为了拿一段文本去启动一个完整 agent。
+    这一步不需要工具循环，只要一次文本补全。
+
+    2026-08-07：联网检索不再假设"模型自带 :online"——迁移到 DeepSeek 官方 API 后
+    这个前提不成立。改用 core/search_augment：按 core/model_capabilities 判断当前
+    模型是不是真有内置联网，有则原样直连（零行为变化，仍在 OpenRouter :online 时
+    完全不受影响）；没有则显式按"产品类目 + 区域"搜一遍，把结果拼进提示词再生成，
+    不再让这步在迁移后静默退化成凭训练记忆瞎编候选公司。
     """
     template = Path(prompt_path).read_text(encoding="utf-8")
 
     async def _run(node: dict) -> list[dict]:
         import config
-        from openai import AsyncOpenAI
         from core.json_salvage import salvage_json_array, looks_truncated
+        from core.search_augment import augment_with_search
 
         prompt = render_generation_prompt(template, node)
+        region = (node.get("region_label") or node.get("region")
+                  or (node.get("regions") or [""])[0] or "")
+        label = node.get("label") or ""
+        # 查询词特意用英文：目标是找真实存在的制造商官网/行业新闻，这类信息源
+        # 英文覆盖通常比中文广，跟中文场景（如 HubSpot 报价术语）不是一回事。
+        query = f"{label} manufacturers {region}".strip()
+        prompt = await augment_with_search(prompt, [query], max_results_per_query=8,
+                                           label=f"prospect_daily:{label}·{region}")
+
         from core.llm import get_client
         client = get_client(timeout=540)   # 大批量生成给长超时（core/llm 单一构建点）
         resp = await client.chat.completions.create(
-            model=config.CLAUDE_MODEL,        # 含 :online，可联网检索
+            model=config.CLAUDE_MODEL,
             max_tokens=_GEN_MAX_TOKENS,
             messages=[{"role": "user", "content": prompt}],
         )

@@ -123,12 +123,29 @@ wr.register_workflow(
 )
 
 
+# 采集要覆盖的搜索主题（2026-08-07 新增，配合 core/search_augment 的 DeepSeek 迁移
+# 补偿机制）。signal_collection_prompt.md 要求覆盖全行业多赛道多信号类型，一条
+# 查询覆盖不了这么广；这里选的是提示词自己标注"余料含义"最高的几类信号
+# （停产/关厂/减值/过剩/裁员/并购）加一条通用行情，在有限查询数内尽量换到高
+# 信息密度。⚠️ 这组查询是第一版起点，不是定论——实际信号覆盖广度/质量如何，
+# 要看过几天真实产出后再调（比如按当前空窗的赛道追加更针对性的查询）。
+_COLLECT_SEARCH_QUERIES = [
+    "electronics component shortage oversupply price cut 2026",
+    "electronics manufacturer plant closure factory shutdown 2026",
+    "semiconductor MCU FPGA inventory write-down excess stock 2026",
+    "electronics industry layoffs restructuring 2026",
+    "electronics component distributor merger acquisition 2026",
+]
+
+
 # ── 信号采集工作流（替代"在对话里让模型自己搜+乱建工具"的不可靠路径）──────────────
 async def _completion_text(prompt: str, retries: int = 1) -> str:
     """流式累积一次大补全；传输错误/空输出自动重试 retries 次。
 
     流式的意义：非流式下响应体截断 = SDK 解析炸整批；流式下截断 = 提前收流，
-    已累积的文本仍然可用。单测可 monkeypatch 本函数。
+    已累积的文本仍然可用。单测可 monkeypatch 本函数（签名保持 (prompt, retries=1)
+    不变——联网检索补偿 2026-08-07 起挪到调用方 collect() 里做，见下方，
+    不在这里加参数，因为已有测试会整函数替身成这个签名）。
     """
     import asyncio as _asyncio
     import config
@@ -139,7 +156,7 @@ async def _completion_text(prompt: str, retries: int = 1) -> str:
         text = ""
         try:
             stream = await client.chat.completions.create(
-                model=config.CLAUDE_MODEL,          # 含 :online，可联网检索
+                model=config.CLAUDE_MODEL,
                 max_tokens=_COLLECT_MAX_TOKENS,     # 采集专用高上限
                 messages=[{"role": "user", "content": prompt}],
                 stream=True,
@@ -171,13 +188,21 @@ def _build_signal_collection():
     template = prompt_path.read_text(encoding="utf-8")
 
     async def collect(ctx: dict) -> list:
-        # 采集不需要工具循环，只要一次带 :online 的文本补全。
+        # 采集不需要工具循环，只要一次文本补全。
         # 实测教训（2026-07-22）：非流式请求 + 大 max_tokens 的响应体巨大，传输
         # 中途被截断时 SDK 解析【整个响应体 JSON】直接抛
         # `Expecting value: line N column 1` ——整批归零，salvage 根本没机会上场。
         # 改为【流式累积】：流被切断只是提前结束，已到手的部分照常走抢救式解析，
         # 「传输层截断」从整批失败降级为少最后几条。外加一次自动重试。
-        text = await _completion_text(template)
+        #
+        # 2026-08-07：联网检索不再假设"模型自带 :online"——在这里（调用方）先经
+        # core/search_augment 判断，没有内置联网才显式搜一遍拼进提示词，模型本身
+        # 带联网则原样直连，零行为变化。放在 collect() 而不是 _completion_text()
+        # 里做，是因为 _completion_text 的签名被已有测试整函数替身过，不能改。
+        from core.search_augment import augment_with_search
+        prompt = await augment_with_search(template, _COLLECT_SEARCH_QUERIES,
+                                           max_results_per_query=6, label="signal_collection")
+        text = await _completion_text(prompt)
         signals = _parse_signal_array(text)     # 抢救式解析，容忍尾部截断
         if not signals:
             # 明确报错而不是静默返回空——否则工作流会"显示成功但库是空的"。

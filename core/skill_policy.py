@@ -224,6 +224,111 @@ def is_reusable_import(name: str) -> bool:
     return False
 
 
+def _fmt_args(a: "ast.arguments") -> str:
+    parts = [p.arg for p in (list(getattr(a, "posonlyargs", [])) + list(a.args))]
+    if a.vararg:
+        parts.append("*" + a.vararg.arg)
+    parts += [k.arg for k in a.kwonlyargs]
+    if a.kwarg:
+        parts.append("**" + a.kwarg.arg)
+    return ", ".join(parts)
+
+
+def _first_doc(node) -> str:
+    import ast
+    d = (ast.get_docstring(node) or "").strip()
+    return d.split("\n", 1)[0][:80]
+
+
+def _const_repr(node) -> str:
+    """把常量赋值渲染成可读取值；取不到字面量就退回省略号。"""
+    import ast
+    try:
+        return repr(ast.literal_eval(node))
+    except Exception:
+        try:
+            return ast.unparse(node)[:120]
+        except Exception:
+            return "..."
+
+
+def auto_module_api_text(module_path: str, include_private: bool = False) -> str:
+    """零人工curation版的 building block 卡片：给定任意本地模块路径，AST 自动抽取
+    其【全部】公共类/函数/大写常量的签名，不需要像 BUILDING_BLOCKS 那样提前手写
+    symbols/constants 列表。
+
+    定位（2026-08-07 新增，呼应"造技能会幻觉外部/新模块 API"这个问题的通用解）：
+    BUILDING_BLOCKS 是"结构签名 + 人工总结的语义坑 + 可抄范例"三件套，质量最高但
+    要人工维护，只覆盖了少数反复复用的模块（HubSpot 相关）。大多数新模块（尤其是
+    刚接入的第三方 SDK，如未来要接的 lark-oapi）不会有人预先写好这份笔记。这个
+    函数负责【结构层】：零人力、随时可对任意模块跑一遍，保证生成器至少拿到"这个
+    模块真实有什么"，不至于在完全没有笔记的新模块上纯靠训练记忆瞎编方法名。
+
+    注意：这只给"有什么"，给不了 BUILDING_BLOCKS 里 notes/recipes 那类"什么用法
+    是错的"语义经验——那部分只能靠人工踩坑后补写（见 BUILDING_BLOCKS 各条目），
+    或者靠 self_review 从 telemetry 失败模式里事后反哺（见 core/self_review.py）。
+    两者不是互斥关系：一个模块可以先只有本函数给的结构层，用出问题后再把踩过的
+    坑升格进 BUILDING_BLOCKS 拿到语义层。
+
+    module_path: 形如 "connectors.web_search" 的点分路径（必须在仓库内）。
+    include_private: 是否也列出下划线开头的方法/函数（默认不列，跟 BUILDING_BLOCKS
+                      的 expose_private 需要显式声明的保守精神一致——没人验证过的
+                      私有方法默认不建议技能直接复用）。
+    """
+    import ast
+    from pathlib import Path
+    repo_root = Path(__file__).resolve().parent.parent
+    path = repo_root / (module_path.replace(".", "/") + ".py")
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        return f"（无法读取或解析 {module_path}：{type(e).__name__}: {e}）"
+
+    body: list[str] = []
+    consts: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id.isupper():
+                    consts.append(f"{t.id} = {_const_repr(node.value)}")
+            continue
+        if isinstance(node, ast.ClassDef):
+            if node.name.startswith("_") and not include_private:
+                continue
+            bases = ", ".join(getattr(b, "id", "") for b in node.bases if getattr(b, "id", ""))
+            body.append(f"class {node.name}({bases}):" if bases else f"class {node.name}:")
+            doc = _first_doc(node)
+            if doc:
+                body.append(f"    # {doc}")
+            for m in node.body:
+                if not isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if m.name.startswith("_") and m.name != "__init__" and not include_private:
+                    continue
+                kw = "async def" if isinstance(m, ast.AsyncFunctionDef) else "def"
+                body.append(f"    {kw} {m.name}({_fmt_args(m.args)})")
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith("_") and not include_private:
+                continue
+            kw = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+            body.append(f"{kw} {node.name}({_fmt_args(node.args)})")
+            doc = _first_doc(node)
+            if doc:
+                body.append(f"    # {doc}")
+
+    if not body and not consts:
+        return f"（{module_path} 没有可提取的公共 API，或模块为空）"
+
+    out = [f"# {module_path} — 自动生成的结构签名（未经人工核实用法，仅代表\"有什么\"，"
+           f"不代表\"怎么用才对\"；用出坑后应补充进 BUILDING_BLOCKS 的 notes/recipes）"]
+    out += body
+    if consts:
+        out.append("")
+        out.append("# 模块级常量（真实取值）：")
+        out += consts
+    return "\n".join(out)
+
+
 def building_blocks_api_text() -> str:
     """用 AST 从 building block 源码抽取【真实 API 面】，渲染成一段权威参考喂给生成器。
 
@@ -240,28 +345,7 @@ def building_blocks_api_text() -> str:
     from pathlib import Path
     repo_root = Path(__file__).resolve().parent.parent
 
-    def fmt_args(a: "ast.arguments") -> str:
-        parts = [p.arg for p in (list(getattr(a, "posonlyargs", [])) + list(a.args))]
-        if a.vararg:
-            parts.append("*" + a.vararg.arg)
-        parts += [k.arg for k in a.kwonlyargs]
-        if a.kwarg:
-            parts.append("**" + a.kwarg.arg)
-        return ", ".join(parts)
-
-    def first_doc(node) -> str:
-        d = (ast.get_docstring(node) or "").strip()
-        return d.split("\n", 1)[0][:80]
-
-    def const_repr(node) -> str:
-        """把常量赋值渲染成可读取值；取不到字面量就退回省略号。"""
-        try:
-            return repr(ast.literal_eval(node))
-        except Exception:
-            try:
-                return ast.unparse(node)[:120]
-            except Exception:
-                return "..."
+    fmt_args, first_doc, const_repr = _fmt_args, _first_doc, _const_repr
 
     blocks = []
     for mod, meta in BUILDING_BLOCKS.items():

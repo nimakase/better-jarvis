@@ -71,6 +71,26 @@ class Settings(BaseSettings):
     claude_model: str = "deepseek/deepseek-v4-flash:online"
     claude_model_light: str = "deepseek/deepseek-v4-flash"
 
+    # ── DeepSeek 官方 API 迁移（2026-08-07）──────────────────────────────
+    # llm_provider 选主控走哪家："openrouter"（现状）｜"deepseek"（官方 API 直连）。
+    # 官方 API 没有 :online 语法——联网检索改由 core/search_augment.py 显式补偿，
+    # 见该模块注释。切换只改这一个开关，模型/base_url/key 全部跟着联动，
+    # 不用满代码搜哪里硬编码了 OpenRouter。
+    llm_provider: str = Field(default="openrouter", validation_alias="JARVIS_LLM_PROVIDER")
+    deepseek_api_key: str = Field(default="", validation_alias="DEEPSEEK_API_KEY")
+    deepseek_base_url: str = Field(default="https://api.deepseek.com/v1",
+                                   validation_alias="DEEPSEEK_BASE_URL")
+    deepseek_model: str = Field(default="deepseek-chat", validation_alias="DEEPSEEK_MODEL")
+    deepseek_model_light: str = Field(default="deepseek-chat",
+                                      validation_alias="DEEPSEEK_MODEL_LIGHT")
+
+    # Exa 搜索（web_search 工具的后端之一；优先于 AnySearch——见 connectors/web_search.py
+    # 的后端选择顺序，免费额度更大、多语言表现更好）。
+    exa_api_key: str = Field(default="", validation_alias="EXA_API_KEY")
+    exa_base_url: str = Field(default="https://api.exa.ai/search", validation_alias="EXA_BASE_URL")
+    # 自设软上限（次/天）：Exa 免费额度是 2万次/月≈666/天，留点余量、避免月底意外超额。
+    exa_daily_cap: int = Field(default=500, validation_alias="EXA_DAILY_CAP")
+
     # 对话控制
     max_history_turns: int = 20
     max_tokens_response: int = 4096
@@ -130,8 +150,26 @@ settings = Settings()
 # ── 向后兼容的模块级常量（全代码库以 config.X 访问）────────────────
 OPENROUTER_API_KEY  = settings.openrouter_api_key
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-CLAUDE_MODEL        = settings.claude_model
-CLAUDE_MODEL_LIGHT  = settings.claude_model_light
+
+# LLM_PROVIDER 是单一事实源：core/llm.py 的 get_client() 只认 LLM_API_KEY/
+# LLM_BASE_URL 这两个名字，不再关心到底是哪家——这样切换供应商不用改 llm.py，
+# 只用改这里（或直接设 JARVIS_LLM_PROVIDER env）。CLAUDE_MODEL/CLAUDE_MODEL_LIGHT
+# 也跟着联动，保持"全代码库以 config.CLAUDE_MODEL 访问模型名"这条既有约定不变——
+# 迁移对调用方是透明的，不用满代码搜哪里硬编码了模型字符串。
+LLM_PROVIDER = (settings.llm_provider or "openrouter").strip().lower()
+DEEPSEEK_API_KEY  = settings.deepseek_api_key
+DEEPSEEK_BASE_URL = settings.deepseek_base_url
+
+if LLM_PROVIDER == "deepseek":
+    LLM_API_KEY  = DEEPSEEK_API_KEY
+    LLM_BASE_URL = DEEPSEEK_BASE_URL
+    CLAUDE_MODEL       = settings.deepseek_model
+    CLAUDE_MODEL_LIGHT = settings.deepseek_model_light
+else:
+    LLM_API_KEY  = OPENROUTER_API_KEY
+    LLM_BASE_URL = OPENROUTER_BASE_URL
+    CLAUDE_MODEL       = settings.claude_model
+    CLAUDE_MODEL_LIGHT = settings.claude_model_light
 
 MEMORY_DB_PATH        = DATA_DIR / "memory.db"
 MEMORY_ENCRYPTION_KEY = settings.memory_encryption_key
@@ -139,6 +177,10 @@ MEMORY_ENCRYPTION_KEY = settings.memory_encryption_key
 ANYSEARCH_API_KEY   = settings.anysearch_api_key
 ANYSEARCH_BASE_URL  = settings.anysearch_base_url
 ANYSEARCH_DAILY_CAP = settings.anysearch_daily_cap
+
+EXA_API_KEY  = settings.exa_api_key
+EXA_BASE_URL = settings.exa_base_url
+EXA_DAILY_CAP = settings.exa_daily_cap
 
 FEISHU_APP_ID       = settings.feishu_app_id
 FEISHU_APP_SECRET   = settings.feishu_app_secret
@@ -179,6 +221,11 @@ def _export_env_for_skills() -> None:
     for k, v in {
         "OPENROUTER_API_KEY":  OPENROUTER_API_KEY,
         "OPENROUTER_BASE_URL": OPENROUTER_BASE_URL,
+        # 供应商无关的名字（2026-08-07 新增）：技能应优先读这两个，而不是假设
+        # 一定是 OpenRouter——LLM_PROVIDER=deepseek 时这两个会指向 DeepSeek 官方 API，
+        # 上面两个 OPENROUTER_* 仍原样导出只为兼容已写死读它们的老技能。
+        "LLM_API_KEY":         LLM_API_KEY,
+        "LLM_BASE_URL":        LLM_BASE_URL,
         "CLAUDE_MODEL":        CLAUDE_MODEL,
         "CLAUDE_MODEL_LIGHT":  CLAUDE_MODEL_LIGHT,
         # 技能需要它才能定位到与 app 共用的运行态目录（如 HubSpot 浏览器 profile）。
