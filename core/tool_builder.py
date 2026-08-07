@@ -767,6 +767,65 @@ async def _gather_env_probe(request: str) -> str:
     )
 
 
+# ── MCP 能力浏览闸门（任务 #7）：造涉外平台的工具前，先看有没有现成 MCP server ──
+#
+# 动机：贾维斯造技能最容易在"根本不知道某个外部系统提供什么能力"这一步就开始
+# 猜（例：给飞书加多维表格能力，不知道飞书有多维表格，也不知道官方已经把整套
+# 能力包成了 MCP server）。core/mcp_discovery.py（任务 #6）已经能连 server 拿
+# 权威工具清单，这里把它接进造技能的生成提示词，分两层生效：
+#   1. 确定性、零成本的自动匹配：已配置的 server 名和 request 词面有重叠 →
+#      直接发现一次并把权威清单注入提示词（跟 _gather_env_probe 对网页结构探针
+#      同一个思路：能拿到权威材料就不该让模型凭猜）。
+#   2. 无论匹不匹配，都带一句简短的标准指令——涉及对接外部平台/服务时，先想
+#      有没有配置对应 MCP server（mcp_list_servers/mcp_discover_tools 可查/可连），
+#      真没有就在生成说明里如实说"没有可核实来源，基于训练知识实现，建议验证"，
+#      不要装作很确定。这条指令是"闸"真正强制的部分——不管匹没匹配到都会出现，
+#      不依赖猜测式匹配是否命中。
+_MCP_STANDING_NOTE = (
+    "【关于对接外部平台/服务】若这个工具要跟某个外部平台/服务打交道（如某个 "
+    "SaaS、办公协作工具的开放能力），先想一下是否已经配置了它的 MCP server——"
+    "可以用 mcp_list_servers 看配置清单、mcp_discover_tools 拿权威工具清单据此"
+    "实现（比凭训练知识/文档印象猜方法名可靠）。如果确认没有配置对应 server，"
+    "就在生成说明里如实指出「未找到可核实来源，本工具基于训练知识实现，建议用后"
+    "先验证一遍」，不要假装很确定。\n\n"
+)
+
+
+async def _gather_mcp_hints(request: str) -> str:
+    """已配置的 MCP server 里，若有名字/描述与 request 词面重叠的，自动发现一次
+    并把权威工具清单注入提示词；同时始终附带一句标准指令（见上）。全程失败降级
+    为只保留标准指令，绝不阻断造工具。"""
+    try:
+        from core import mcp_discovery
+        names = mcp_discovery.configured_servers()
+        if not names:
+            return _MCP_STANDING_NOTE
+        from core.capability import _score, _tokens
+        q = _tokens(request)
+        # 注意方向：query=server 名的词、target=request 的词——server 名通常很短
+        # （2~4 个词/二元组），"名字里的词有多大比例被 request 提到"是比反过来更
+        # 干净的信号；反过来算（request 词有多少落在短短的 server 名里）会被
+        # request 里的大量无关词面稀释，实测漏掉明显相关的例子。
+        hit_names = [n for n in names if _score(_tokens(n), q) >= 0.5]
+        if not hit_names:
+            return _MCP_STANDING_NOTE
+        blocks = []
+        for n in hit_names[:2]:   # 最多自动连两个，避免造一次工具触发一堆连接
+            result = await mcp_discovery.discover(n, use_cache=True, timeout=15)
+            if not result["ok"] or not result["tools"]:
+                continue
+            lines = [f"『{n}』MCP server 的权威工具清单（据此实现，不要臆造未列出的方法）："]
+            for t in result["tools"]:
+                lines.append(f"  - {t['name']}：{(t.get('description') or '')[:150]}")
+            blocks.append("\n".join(lines))
+        if not blocks:
+            return _MCP_STANDING_NOTE
+        return "【" + "；".join(hit_names) + " 看起来与需求相关，已自动发现】\n\n" \
+               + "\n\n".join(blocks) + "\n\n" + _MCP_STANDING_NOTE
+    except Exception:
+        return _MCP_STANDING_NOTE
+
+
 # ── 两趟参考注入：写代码前先读现有源码学真实用法/网页结构（省 token 的门控式做法）──
 
 _REFERENCE_MODULES = list(BUILDING_BLOCKS.keys())   # 允许被参考的第一方模块
@@ -936,9 +995,10 @@ async def create_tool(name: str, request: str, clarifications: str = "") -> str:
         # （生成 → 静态+一致性校验 → 隔离冒烟 → 把真实报错喂回改，全部门过才停）。
         ref = await _gather_references(request)
         env = await _gather_env_probe(request)
+        mcp_hint = await _gather_mcp_hints(request)
         clar = (f"\n\n【用户对关键问题的确认（优先级高于上面的需求描述，"
                 f"如有冲突以此为准）】\n{clarifications.strip()}" if clarifications.strip() else "")
-        base = _user_context_text() + env + ref + f"工具名：{name}\n需求：{request}{clar}"
+        base = _user_context_text() + env + ref + mcp_hint + f"工具名：{name}\n需求：{request}{clar}"
         code, validation, smoke_ok, smoke_msg, attempts = await _author_verified_loop(name, base, request)
         message = _authoring_message(name, "生成", validation, smoke_ok, smoke_msg, attempts)
         return ToolResult(text=message + "\n\n" + validation_summary(validation), actions=[Action("code_review", {
