@@ -67,6 +67,8 @@ class WorkflowRun:
     failed_at: Optional[str] = None
     stopped_at: Optional[str] = None              # StopWorkflow 干净收尾发生在哪一步
     seconds: float = 0.0
+    trace_id: str = ""                            # 任务 #17：这条 run 期间所有工具调用
+                                                   # 的 telemetry 记录都能靠这个 id 串起来
 
     def summary(self) -> str:
         marks = {"ok": "✓", "skipped": "−", "degraded": "≈", "failed": "✗", "stopped": "◼"}
@@ -85,56 +87,65 @@ async def _call(fn: StepFn, ctx: dict) -> Any:
 
 
 async def run_workflow(name: str, steps: list[Step], context: Optional[dict] = None,
-                       logger=None) -> WorkflowRun:
+                       logger=None, trace_id: Optional[str] = None) -> WorkflowRun:
+    """trace_id（任务 #17）：不传则若已在某个 trace 里（嵌套调用）复用外层 trace，
+    否则铸一个新的（wf_<name>_...）。整条 run 期间 core.trace.get() 都返回它，
+    这条 run 里所有 telemetry.record（工具调用）自动带上，事后可用
+    telemetry.calls_by_trace(run.trace_id) 串起这次 run 的全部工具调用。"""
+    from core import trace as _trace
+
     ctx = context if context is not None else {}
     run = WorkflowRun(name=name, status="ok", context=ctx)
+    effective_trace = trace_id if trace_id is not None else (_trace.get() or _trace.new_id(f"wf_{name}"))
+    run.trace_id = effective_trace
     t0 = time.time()
 
-    for step in steps:
-        s0 = time.time()
-        attempts = 0
-        last_err: Optional[Exception] = None
-        while attempts <= step.retries:
-            attempts += 1
-            try:
-                out = await _call(step.fn, ctx)
-                if out is not None:
-                    ctx[step.name] = out
-                run.steps.append(StepResult(step.name, "ok", attempts, seconds=time.time() - s0))
-                last_err = None
-                break
-            except StopWorkflow as stop:
-                # 干净收尾：不算失败，整条流程到此为止（不重试、不走错误策略）
-                run.steps.append(StepResult(step.name, "stopped", attempts,
-                                            stop.reason or None, time.time() - s0))
-                run.stopped_at = step.name
-                run.seconds = time.time() - t0
-                return run
-            except Exception as exc:
-                last_err = exc
-                if logger:
-                    logger.warning("workflow %s step %s attempt %s failed: %s", name, step.name, attempts, exc)
-                if attempts <= step.retries:
-                    continue
-        if last_err is None:
-            continue
+    with _trace.scope(effective_trace):
+        for step in steps:
+            s0 = time.time()
+            attempts = 0
+            last_err: Optional[Exception] = None
+            while attempts <= step.retries:
+                attempts += 1
+                try:
+                    out = await _call(step.fn, ctx)
+                    if out is not None:
+                        ctx[step.name] = out
+                    run.steps.append(StepResult(step.name, "ok", attempts, seconds=time.time() - s0))
+                    last_err = None
+                    break
+                except StopWorkflow as stop:
+                    # 干净收尾：不算失败，整条流程到此为止（不重试、不走错误策略）
+                    run.steps.append(StepResult(step.name, "stopped", attempts,
+                                                stop.reason or None, time.time() - s0))
+                    run.stopped_at = step.name
+                    run.seconds = time.time() - t0
+                    return run
+                except Exception as exc:
+                    last_err = exc
+                    if logger:
+                        logger.warning("workflow %s step %s attempt %s failed: %s", name, step.name, attempts, exc)
+                    if attempts <= step.retries:
+                        continue
+            if last_err is None:
+                continue
 
-        # 重试耗尽 → 按错误策略处理
-        secs = time.time() - s0
-        if step.on_error == "skip":
-            run.steps.append(StepResult(step.name, "skipped", attempts, str(last_err), secs))
-            continue
-        if step.on_error == "degrade":
-            if step.degrade_flag:
-                ctx[step.degrade_flag] = True
-            run.steps.append(StepResult(step.name, "degraded", attempts, str(last_err), secs))
-            continue
-        # abort
-        run.steps.append(StepResult(step.name, "failed", attempts, str(last_err), secs))
-        run.status = "failed"
-        run.failed_at = step.name
+            # 重试耗尽 → 按错误策略处理
+            secs = time.time() - s0
+            if step.on_error == "skip":
+                run.steps.append(StepResult(step.name, "skipped", attempts, str(last_err), secs))
+                continue
+            if step.on_error == "degrade":
+                if step.degrade_flag:
+                    ctx[step.degrade_flag] = True
+                run.steps.append(StepResult(step.name, "degraded", attempts, str(last_err), secs))
+                continue
+            # abort
+            run.steps.append(StepResult(step.name, "failed", attempts, str(last_err), secs))
+            run.status = "failed"
+            run.failed_at = step.name
+            run.seconds = time.time() - t0
+            return run
+
         run.seconds = time.time() - t0
         return run
-
-    run.seconds = time.time() - t0
-    return run

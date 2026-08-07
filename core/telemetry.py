@@ -56,19 +56,45 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_receipts_time ON delivery_receipts(created_at);
         """)
+        # 任务 #17：统一 trace_id（见 core/trace.py）——幂等迁移，老库补列，新库一步到位
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(tool_calls)")}
+        if "trace_id" not in cols:
+            conn.execute("ALTER TABLE tool_calls ADD COLUMN trace_id TEXT NOT NULL DEFAULT ''")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_calls_trace ON tool_calls(trace_id)")
 
 
 def record(tool: str, ok: bool, ms: int, error: str = "",
-           session: str = "interactive") -> None:
-    """记一次工具调用。绝不抛异常、绝不阻塞主流程。"""
+           session: str = "interactive", trace_id: Optional[str] = None) -> None:
+    """记一次工具调用。绝不抛异常、绝不阻塞主流程。
+
+    trace_id：任务 #17。不传（默认 None）则自动读 core.trace.get()——workflow/
+    self_iteration 跑在 core.trace.scope() 里时，中间嵌套多深都不用手动传参，
+    这里自动接得到；没人 scope() 过时是空串，与此前行为完全一致。显式传空串
+    可以强制不打标（很少用得到）。"""
+    if trace_id is None:
+        try:
+            from core import trace as _trace
+            trace_id = _trace.get()
+        except Exception:
+            trace_id = ""
     try:
         with _get_conn() as conn:
             conn.execute(
-                "INSERT INTO tool_calls (tool, ok, ms, error, session, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (tool, 1 if ok else 0, int(ms), (error or "")[:300], session, _now()))
+                "INSERT INTO tool_calls (tool, ok, ms, error, session, trace_id, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (tool, 1 if ok else 0, int(ms), (error or "")[:300], session, trace_id or "", _now()))
     except Exception:
         pass
+
+
+def calls_by_trace(trace_id: str, limit: int = 200) -> list[dict]:
+    """按 trace_id 查这条 trace 下的全部工具调用（串联 workflow/self_iteration
+    一次运行里的所有工具调用，任务 #17 的主要消费场景）。"""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tool_calls WHERE trace_id = ? ORDER BY id ASC LIMIT ?",
+            (trace_id, limit)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def record_delivery(track: str, title: str, delivered: bool, channels: dict) -> None:

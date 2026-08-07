@@ -144,6 +144,20 @@ async def run_cycle(model_fn: ModelFn, *, iterator: Optional[SelfIterator] = Non
                     focus_source: Optional[dict[str, str]] = None,
                     review_dir: Optional[Path] = None,
                     module_map: Optional[str] = None) -> dict:
+    # 任务 #17：一次反思周期铸一个 trace_id，全程内 telemetry.record 自动带上——
+    # 事后能用 core.telemetry.calls_by_trace() 查这一轮反思触发的所有工具调用
+    # （如 it.execute() 内部跑测试套件时的工具调用），不用再靠时间戳模糊对齐。
+    from core import trace as _trace
+    with _trace.scope(_trace.get() or _trace.new_id("review")):
+        return await _run_cycle_body(
+            model_fn, iterator=iterator, focus_source=focus_source,
+            review_dir=review_dir, module_map=module_map)
+
+
+async def _run_cycle_body(model_fn: ModelFn, *, iterator: Optional[SelfIterator] = None,
+                          focus_source: Optional[dict[str, str]] = None,
+                          review_dir: Optional[Path] = None,
+                          module_map: Optional[str] = None) -> dict:
     it = iterator or SelfIterator()
     rdir = Path(review_dir or DEFAULT_REVIEW_DIR)
     src = focus_source if focus_source is not None else _default_focus(it.repo)
