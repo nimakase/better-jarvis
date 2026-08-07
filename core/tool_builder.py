@@ -969,6 +969,92 @@ def _authoring_message(name: str, verb: str, validation: dict, smoke_ok: bool,
             f"很可能是依赖缺失或复用的接口对不上，你看下代码或告诉我怎么调整。")
 
 
+_BEHAVIORAL_REVIEW_PROMPT = """你是一个严格的代码审查员。下面是一个刚生成的贾维斯自建工具：
+只通过了【结构层】验证（静态语法/一致性检查 + 隔离子进程能正常 import），这两项都不执行
+handler 本身的逻辑——调对了方法名、能正常加载，不代表逻辑真的对。你的任务是找【结构验证
+抓不到、但真跑起来会产出错误结果或漏处理边界情况】的问题，例如：
+- 对 API/工具返回值的字段名、结构的假设是否可能出错（没做防御性判断就直接取深层字段）
+- 明显的逻辑错误（条件写反、边界值差一、异步/同步搞混、忘记 await）
+- 明显没处理的边界情况（空输入、None、空列表/空字符串）——但不要吹毛求疵到要求处理一切
+  假想的极端情况，只挑【真的可能发生】的
+- 是否有跟需求明显不符的地方（实现漏了需求提到的某个点）
+
+原始需求：{request}
+
+生成的代码：
+{code}
+
+只关注真会导致【错误结果或崩溃】的问题，不要挑代码风格/命名这类无关紧要的点，找不到就
+如实说没有——不要为了显得"有内容"硬凑问题。按下面格式回复：
+第一行：OK（没有值得关注的问题）或 CONCERNS（有）
+如果是 CONCERNS，后面每行一条，最多 3 条，格式：严重度(low/medium/high)|具体问题"""
+
+
+async def _behavioral_review(name: str, request: str, code: str) -> dict:
+    """任务 #11：结构验证（静态校验+隔离冒烟）只保证"能加载"，不保证"逻辑对"——
+    这一步是行为级验证闭环的第一版：不执行 handler 本身（执行未经验证的生成代码
+    有真实副作用风险，尤其是会写外部系统的工具），而是让模型对着代码和原始需求
+    做一次有针对性的自我审查，专找"结构验证抓不到、真跑起来才会错"的逻辑问题。
+
+    按 core.model_routing 的 "code_review" 用途路由模型（任务 #20 打的地基）——
+    配置了更强的代码模型就用它审，没配置就退回主模型，零额外配置成本。
+
+    返回 {"verdict": "ok"|"concerns"|"unknown", "concerns": [{"severity","message"}]}。
+    调用/解析失败一律降级为 verdict="unknown"（跟"复查了、没发现问题"是不同的诚实
+    表述），不阻断造工具主流程。"""
+    try:
+        from core import model_routing
+        from core.llm import get_client
+        client = get_client()
+        model = model_routing.model_for("code_review") or config.CLAUDE_MODEL
+        resp = await client.chat.completions.create(
+            model=model, max_tokens=600, timeout=45,
+            messages=[{"role": "user", "content": _BEHAVIORAL_REVIEW_PROMPT.format(
+                request=request, code=code)}],
+        )
+        text = (resp.choices[0].message.content or "").strip()
+    except Exception:
+        return {"verdict": "unknown", "concerns": []}
+
+    if not text:
+        return {"verdict": "unknown", "concerns": []}
+    lines = text.splitlines()
+    head = lines[0].strip().upper()
+    if head.startswith("OK"):
+        return {"verdict": "ok", "concerns": []}
+    if not head.startswith("CONCERNS"):
+        return {"verdict": "unknown", "concerns": []}
+
+    concerns = []
+    for line in lines[1:]:
+        line = line.strip().lstrip("-*0123456789. ").strip()
+        if "|" not in line:
+            continue
+        sev, _, msg = line.partition("|")
+        sev = sev.strip().lower()
+        if sev not in ("low", "medium", "high"):
+            sev = "low"
+        msg = msg.strip()
+        if msg:
+            concerns.append({"severity": sev, "message": msg})
+        if len(concerns) >= 3:
+            break
+    return {"verdict": "concerns" if concerns else "ok", "concerns": concerns}
+
+
+def _render_behavioral_review(review: dict) -> str:
+    """渲成可拼进给用户看的消息的一小段。verdict=ok/unknown 都返回空串——
+    ok 不需要额外强调，unknown（复查本身失败）不该制造"好像有问题"的误导。"""
+    if review.get("verdict") != "concerns" or not review.get("concerns"):
+        return ""
+    icon = {"high": "🔴", "medium": "⚠️", "low": "·"}
+    lines = ["\n\n【行为级复查发现的疑点】（模型对着代码和需求自查，供你激活前参考，"
+             "不代表一定有问题）："]
+    for c in review["concerns"]:
+        lines.append(f"{icon.get(c['severity'], '·')} {c['message']}")
+    return "\n".join(lines)
+
+
 # ── 注册进主控的元工具 ────────────────────────────────────────────────────────
 
 async def create_tool(name: str, request: str, clarifications: str = "") -> str:
@@ -1023,6 +1109,11 @@ async def create_tool(name: str, request: str, clarifications: str = "") -> str:
         base = _user_context_text() + env + ref + mcp_hint + f"工具名：{name}\n需求：{request}{clar}"
         code, validation, smoke_ok, smoke_msg, attempts = await _author_verified_loop(name, base, request)
         message = _authoring_message(name, "生成", validation, smoke_ok, smoke_msg, attempts)
+        # 任务 #11：结构验证过了（能加载）不代表逻辑对，加一道行为级自查——
+        # 只在结构验证已经过关时才做（结构都没过，逻辑复查没意义），失败降级为空。
+        if validation["ok"] and smoke_ok:
+            review = await _behavioral_review(name, request, code)
+            message += _render_behavioral_review(review)
         return ToolResult(text=message + "\n\n" + validation_summary(validation), actions=[Action("code_review", {
             "name": name, "code": code, "validation": validation, "message": message,
         })])
@@ -1056,6 +1147,9 @@ async def edit_tool(name: str, change_request: str) -> str:
         new_code, validation, smoke_ok, smoke_msg, attempts = await _author_verified_loop(
             name, base, orig_description, extra_meta=extra)
         message = _authoring_message(name, "修改", validation, smoke_ok, smoke_msg, attempts)
+        if validation["ok"] and smoke_ok:
+            review = await _behavioral_review(name, change_request, new_code)
+            message += _render_behavioral_review(review)
         return ToolResult(text=message + "\n\n" + validation_summary(validation), actions=[Action("code_review", {
             "name": name, "code": new_code, "validation": validation, "message": message,
         })])
