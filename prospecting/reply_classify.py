@@ -180,10 +180,18 @@ async def _llm_classify_text(reply_text: str, account_name: str = "") -> str:
         from core.llm import get_client
         client = get_client()
         model = getattr(config, "CLAUDE_MODEL_LIGHT", None) or config.CLAUDE_MODEL
+        try:
+            from prospecting.business_context import business_context
+            ctx = business_context()
+        except Exception:
+            ctx = ""
+        system = "You classify inbound B2B sales-email replies. Follow the instructions exactly."
+        if ctx:
+            system += "\n\n业务背景(判类别时参考):\n" + ctx
         resp = await client.chat.completions.create(
             model=model, max_tokens=200, timeout=30,
             messages=[
-                {"role": "system", "content": "You classify inbound B2B sales-email replies. Follow the instructions exactly."},
+                {"role": "system", "content": system},
                 {"role": "user", "content": build_classify_prompt(reply_text, account_name)},
             ],
         )

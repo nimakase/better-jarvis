@@ -86,4 +86,24 @@ check(bz._has_deal_json('x {"won":2} y') is True and bz._has_deal_json("nope") i
 check(ag.core_tier(bz.parse_deal_summary('{"won":3}')["won"]) == "T0", "won=3 → T0")
 check(ag.core_tier(bz.parse_deal_summary('{"won":1}')["won"]) == "T1", "won=1 → T1")
 
+# ── 业务上下文挂件 + 处置解读器(纯层)──────────────────────────
+from prospecting.business_context import business_context   # noqa: E402
+from prospecting import disposition as dz                    # noqa: E402
+
+bctx = business_context()
+check(len(bctx) > 200 and ("excess" in bctx or "Prospecting" in bctx), "业务上下文能读到文档全文")
+
+dp = dz.build_prompt("保护性标core,别动这家", account_context="账户 ACME · Core 无 deal")
+check(dz.PROTECT in dp and dz.DROP in dp and "INTENT:" in dp, "处置 prompt 含意图集 + 输出格式")
+check("保护性标core" in dp, "处置 prompt 含 Ned 的备注")
+check("业务背景" in dp, "处置 prompt 带业务上下文")
+
+pv = dz.parse("INTENT: protect\nSUMMARY: 保护这家,别动")
+check(pv["intent"] == dz.PROTECT and pv["summary"] == "保护这家,别动", "解析 intent+summary")
+check(dz.parse("INTENT: bogus\nSUMMARY: x")["intent"] == dz.UNCLEAR, "未知 intent → unclear")
+check(dz.interpret("") is None, "空备注 → None")
+for txt, exp in [("换人试试Y", dz.SWITCH), ("放弃这家", dz.DROP), ("料好", dz.LIST_QUALITY), ("已处理", dz.DONE)]:
+    p = dz.build_prompt(txt)
+    check(exp in p, f"prompt 含意图 {exp}")
+
 print("✅ test_customer_loop_v2 全部通过")

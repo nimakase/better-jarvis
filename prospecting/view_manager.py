@@ -83,14 +83,23 @@ def nameless_accounts(records: list) -> list:
 def split_accounts(records: list):
     """把读取到的账户记录分成 (prospecting 账户名列表, core 账户[{name,last_activity}])。
 
-    用 account_grading.classify 判 type(有 deal → core)。缺名账户(见 is_valid_account_name)剔除。纯逻辑,可单测。
+    ⚠【按 Ned 设的 Account Type 分,尊重手动 Core】:existing_type=core→Core(受保护,走维护流,
+    即使没 deal——如"保护性标 core");=prospecting→Prospecting;Type 为空时才回退按"有没有 deal"判
+    (account_grading.classify)。缺名账户(见 is_valid_account_name)剔除。纯逻辑,可单测。
     """
     prospecting, core = [], []
     for r in records:
         name = (r.get("account_name") or "").strip()
         if not is_valid_account_name(name):
             continue
-        if grading.classify(r)["type"] == "core":
+        etype = r.get("existing_type")           # Ned 设的 Account Type:'core'/'prospecting'/None
+        if etype == "core":
+            is_core = True
+        elif etype == "prospecting":
+            is_core = False
+        else:                                    # Type 空 → 回退看有没有 deal
+            is_core = grading.classify(r)["type"] == "core"
+        if is_core:
             core.append({"name": name, "last_activity": r.get("last_activity_date")})
         else:
             prospecting.append(name)
@@ -197,6 +206,32 @@ def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = 
         if logger:
             logger.warning("bitable 读处置失败(跳过):%s", e)
 
+    # 保护性 Core:Account Type=Core 但没 deal(如"保护性标 core")。只把【你还没在 Bitable 批注的】
+    # 列进 FYI 温和提醒;你写了 note(处置/list质量)= 已知会 → 不再提。绝不自动降级(硬护栏)。
+    core_no_deal_fyi = []
+    for c in core:
+        rec = by_name.get(c["name"], {})
+        if int(rec.get("num_associated_deals") or 0) == 0 and int(rec.get("num_open_deals") or 0) == 0:
+            note = disp.get(outreach_store._norm(c["name"])) or {}
+            if not ((note.get("处置") or "").strip() or (note.get("list质量") or "").strip()):
+                core_no_deal_fyi.append(c["name"])
+
+    # 处置解读器(秘书逻辑):读懂 Ned 每格「处置」备注的意图,摆进夜报让他看到贾维斯懂了。
+    # 深层动作(暂停/放弃真改行为)后续增量接;这里先解读 + 上报(安全,不因备注动 HubSpot)。
+    dispositions_understood = []
+    for _k, d in disp.items():
+        note = (d.get("处置") or "").strip()
+        if not note:
+            continue
+        try:
+            from prospecting import disposition as dz
+            v = dz.interpret(note, account_context=f"账户 {d.get('账户名')}")
+        except Exception:
+            v = None
+        if v:
+            dispositions_understood.append({"account": d.get("账户名"), "intent": v.get("intent"),
+                                            "summary": v.get("summary"), "note": note})
+
     # ── Prospecting:Breeze 抽 outreach(带 domain 消歧)→ 状态机 → 回复交 reply_classify 定局 ──
     for acct in pros_todo:
         rec = by_name.get(acct, {})
@@ -265,6 +300,8 @@ def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = 
         "processed_prospecting": len(pros_todo), "processed_core": len(core_todo),
         "reply_proposals": len(proposals), "core_due": len(core_due),
         "nameless_count": len(nameless), "breeze_errors": errors,
+        "core_no_deal_fyi": core_no_deal_fyi,   # Type=Core 但没 deal 且你没批注 → 确认要保护?
+        "dispositions_understood": dispositions_understood,   # 贾维斯读懂的处置备注(秘书)
         "bitable": bitable_res,
         "cumulative_segments": {k: len(v) for k, v in cumulative.items()},
         "applied": applied, "applied_mode": "APPLY" if apply else "dry-run",
