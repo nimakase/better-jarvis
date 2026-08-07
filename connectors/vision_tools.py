@@ -32,6 +32,7 @@ tool = partial(_tool, group="self")
     },
     effect=effects.READ_LOCAL,
     duration="slow",
+    capability_workaround="vision",  # 主模型一旦原生带视觉，这条通路多半可以退休
 )
 async def describe_image(image_path: str, question: str = "") -> str:
     from core import vision

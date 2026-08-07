@@ -34,6 +34,11 @@ class ToolSpec:
     timeout_s: "float | None" = 0  # 强制超时秒数（见 core/tool_timeout.py）；
                              # 0=未声明，由 timeout_of() 按内置表/15s 默认值兜底；
                              # None=显式声明"不设超时"（极少数，需慎用）
+    capability_workaround: str = ""  # 若这个工具是"给主模型缺失的某项能力搭的临时
+                             # 通路"（见 core/model_capabilities.ModelCapabilities
+                             # 的字段名，如 "vision"），在这里点名。空=不是workaround。
+                             # 供 core/capability_watch.py 检测模型能力变化后，
+                             # 提示"这个工具原来的存在理由可能已经不成立了"。
 
 
 # 注册表：name -> ToolSpec；_order 保留注册顺序（影响呈现给模型的顺序）
@@ -115,7 +120,8 @@ def unregister(name: str) -> bool:
 
 
 def tool(name: str, description: str, input_schema: Optional[dict] = None,
-         group: str = "general", effect: str = "", duration: str = ""):
+         group: str = "general", effect: str = "", duration: str = "",
+         capability_workaround: str = ""):
     """装饰器：把一个（async）函数声明为工具并注册。
 
     用法：
@@ -131,6 +137,10 @@ def tool(name: str, description: str, input_schema: Optional[dict] = None,
     慢的新工具（联网调用、OCR、多步生成……）建议显式声明 duration="slow"；
     预期会长时间跑（分钟级）的活，第一反应应该是改造成 spawn_subtask 派发到
     后台，而不是声明 duration="unbounded"。
+    capability_workaround：若这个工具是给主模型缺失的某项能力搭的临时通路，
+    在这里点名该能力（对应 core.model_capabilities.ModelCapabilities 的字段名，
+    如 "vision"）。空=不是 workaround。供 core/capability_watch.py 检测到模型
+    后来获得了这项能力时，提示这个工具可能不再需要绕这一圈。
     """
     def deco(fn: Callable) -> Callable:
         timeout_s: "float | None" = 0
@@ -145,6 +155,7 @@ def tool(name: str, description: str, input_schema: Optional[dict] = None,
             group=group,
             effect=effect,
             timeout_s=timeout_s,
+            capability_workaround=capability_workaround,
         ))
         return fn
     return deco
