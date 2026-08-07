@@ -148,7 +148,10 @@ async def _t_run_cycle():
 
     check(trace.get() == "", "run_cycle 之前顶层无 trace（前置条件）")
     it = SelfIterator(repo=_REPO)
-    result = await sr.run_cycle(model_fn, iterator=it, focus_source={}, module_map="")
+    # review_dir 必须显式隔离到临时目录——不传会写进仓库真实的 docs/self_review/，
+    # 污染生产复盘记录（这里就是曾经的教训，别再犯）。
+    result = await sr.run_cycle(model_fn, iterator=it, focus_source={}, module_map="",
+                                review_dir=_TMP / "self_review_out")
     check(seen.get("trace_during_model_call", "").startswith("review_"),
           f"run_cycle 执行期间处在一个 review_ 开头的 trace 里：{seen.get('trace_during_model_call')!r}")
     check(trace.get() == "", "run_cycle 跑完后顶层 trace 环境未被污染")

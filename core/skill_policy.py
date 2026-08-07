@@ -224,6 +224,31 @@ def is_reusable_import(name: str) -> bool:
     return False
 
 
+def used_building_block_modules(code: str) -> set[str]:
+    """AST 扫代码，返回它实际 import 过的 BUILDING_BLOCKS 模块名集合（精确到表里
+    登记的那个 key，不是任意子路径）。供 core.tool_builder 在生成的技能通过静态
+    校验+隔离冒烟后，判断该给哪些模块记一笔[[core/building_block_notes]]验证笔记
+    （任务 #12）。解析失败返回空集，不抛异常。"""
+    import ast
+    try:
+        tree = ast.parse(code)
+    except Exception:
+        return set()
+    hit: set = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and is_reusable_import(node.module):
+            for mod in BUILDING_BLOCKS:
+                if node.module == mod or node.module.startswith(mod + "."):
+                    hit.add(mod)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if is_reusable_import(alias.name):
+                    for mod in BUILDING_BLOCKS:
+                        if alias.name == mod or alias.name.startswith(mod + "."):
+                            hit.add(mod)
+    return hit
+
+
 def _fmt_args(a: "ast.arguments") -> str:
     parts = [p.arg for p in (list(getattr(a, "posonlyargs", [])) + list(a.args))]
     if a.vararg:
@@ -326,6 +351,16 @@ def auto_module_api_text(module_path: str, include_private: bool = False) -> str
         out.append("")
         out.append("# 模块级常量（真实取值）：")
         out += consts
+    # 任务 #12：即便这个模块没资格进 BUILDING_BLOCKS（还没人工整理 notes/recipes），
+    # 只要真被某次造技能用过且通过静态校验+隔离冒烟，这里依然能看到实践验证记录——
+    # 结构层（本函数）和验证层（building_block_notes）是两条独立轨道，不互相依赖。
+    try:
+        from core import building_block_notes as _bb_notes
+        note_block = _bb_notes.build_block(module_path)
+        if note_block:
+            out.append(note_block)
+    except Exception:
+        pass
     return "\n".join(out)
 
 
@@ -420,6 +455,12 @@ def building_blocks_api_text() -> str:
             section += f"\n\n## {mod} 的【正确用法范例】（照抄这个骨架，别自创）：\n"
             for title, snippet in recipes:
                 section += f"\n# {title}\n{snippet}\n"
+        # 任务 #12：实践验证笔记（造技能真用过、过了静态校验+隔离冒烟才会有）
+        try:
+            from core import building_block_notes as _bb_notes
+            section += _bb_notes.build_block(mod)
+        except Exception:
+            pass
         if section:
             blocks.append(section)
     return "\n\n".join(blocks) if blocks else "（当前无可复用 building block）"

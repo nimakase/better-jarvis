@@ -902,6 +902,27 @@ def _write_draft(name: str, code: str, description: str, extra_meta: dict = None
     return tool_path, validation
 
 
+def _write_back_building_block_notes(name: str, description: str, code: str) -> None:
+    """任务 #12：技能通过静态校验+隔离冒烟后，给它实际 import 过的 BUILDING_BLOCKS
+    模块各记一笔实践验证笔记（core/building_block_notes.py）——闭环任务 #10 留下的
+    "自动抽取的 API 卡片未经人工核实"这句免责声明：用得越多，卡片旁边积累的实践
+    证据越多。绝不抛异常、绝不阻断造工具主流程（旁路增强，失败纯粹不记）。"""
+    try:
+        from core import building_block_notes, skill_policy
+        mods = skill_policy.used_building_block_modules(code)
+        if not mods:
+            return
+        for mod in mods:
+            building_block_notes.add_note(
+                mod,
+                f"技能「{name}」（{(description or '')[:60]}）用到了这个模块，"
+                f"经隔离冒烟验证可正常 import/加载",
+                evidence=f"skill:{name}",
+            )
+    except Exception:
+        pass
+
+
 async def _author_verified_loop(
     name: str, base_content: str, description: str,
     extra_meta: dict = None, max_attempts: int = None,
@@ -925,6 +946,7 @@ async def _author_verified_loop(
             continue
         smoke_ok, smoke_msg = smoke_import_skill(tool_path)
         if smoke_ok:
+            _write_back_building_block_notes(name, description, code)
             return code, validation, True, "ok", attempt
         content = base_content + (
             f"\n\n上一版能过静态校验，但在隔离子进程 import/加载时失败：{smoke_msg}\n"
