@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     # 默认关：需在真实飞书环境联调验证后再开；开启后任一步失败会自动降级回
     # 「占位卡 + patch 整卡」的既有稳定流式（见 lark_bridge._stream_open）。
     feishu_native_streaming: bool = False
+    # 客户循环「驾驶舱」多维表格(Bitable)标识:scripts.bitable_bootstrap 建表后写进 .env。
+    bitable_app_token: str = ""
+    bitable_table_id: str = ""
 
     # 模型（OpenRouter 格式 provider/model-name；:online 启用内置联网）
     claude_model: str = "deepseek/deepseek-v4-flash:online"
@@ -117,6 +120,10 @@ class Settings(BaseSettings):
                                     validation_alias="ANYSEARCH_BASE_URL")
     anysearch_daily_cap: int = Field(default=900, validation_alias="ANYSEARCH_DAILY_CAP")
 
+    # 客户循环夜间作业:apply=真写(默认 False=只读 dry-run);grade_view_url 覆盖全字段视图。
+    customer_loop_apply: bool = Field(default=False, validation_alias="JARVIS_CUSTOMER_LOOP_APPLY")
+    grade_view_url: str = Field(default="", validation_alias="JARVIS_GRADE_VIEW_URL")
+
 
 settings = Settings()
 
@@ -135,8 +142,13 @@ ANYSEARCH_DAILY_CAP = settings.anysearch_daily_cap
 
 FEISHU_APP_ID       = settings.feishu_app_id
 FEISHU_APP_SECRET   = settings.feishu_app_secret
+
+CUSTOMER_LOOP_APPLY = settings.customer_loop_apply
+GRADE_VIEW_URL      = settings.grade_view_url
 FEISHU_PUSH_OPEN_ID = settings.feishu_push_open_id
 FEISHU_NATIVE_STREAMING = settings.feishu_native_streaming
+BITABLE_APP_TOKEN   = settings.bitable_app_token
+BITABLE_TABLE_ID    = settings.bitable_table_id
 
 MAX_HISTORY_TURNS         = settings.max_history_turns
 MAX_TOKENS_RESPONSE       = settings.max_tokens_response

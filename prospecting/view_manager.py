@@ -121,6 +121,22 @@ def run(browser, accounts: list, view_url_map: dict,
             "applied": applied, "accounts": len(accounts)}
 
 
+def _bitable_row(name: str, st: dict) -> dict:
+    """把一个账户的状态 dict 映射成 Bitable「账户」表一行(只含贾维斯写的列;Ned 的 list质量/处置 不碰)。"""
+    from datetime import date
+    return {
+        "账户名": name,
+        "段": st.get("view") or "-",
+        "状态": st.get("state") or "-",
+        "分层": st.get("tier") or "-",
+        "轮次": int(st.get("rounds_done") or 0),
+        "上次outreach": st.get("last_outreach") or "-",
+        "decay阶段": st.get("decay_stage") or "-",
+        "赢单数": int(st.get("won") or 0),
+        "更新时间": date.today().isoformat(),
+    }
+
+
 def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = None,
                    apply: bool = False, limit: Optional[int] = None, resume: bool = True,
                    today=None, logger=None) -> dict:
@@ -169,7 +185,17 @@ def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = 
     if limit:
         pros_todo, core_todo = pros_todo[:limit], core_todo[:limit]
 
-    errors, proposals = [], []
+    errors, proposals, bitable_rows = [], [], []
+
+    # 驾驶舱:读回 Ned 手写的处置(list质量喂 core_tier;处置留作信号)。没配 Bitable / 读失败 → 空,不阻塞。
+    disp = {}
+    try:
+        from prospecting import bitable_client as bc
+        if bc._cfg()[0]:
+            disp = bc.read_dispositions()
+    except Exception as e:
+        if logger:
+            logger.warning("bitable 读处置失败(跳过):%s", e)
 
     # ── Prospecting:Breeze 抽 outreach(带 domain 消歧)→ 状态机 → 回复交 reply_classify 定局 ──
     for acct in pros_todo:
@@ -192,8 +218,9 @@ def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = 
                 proposals.append({"account": acct, "proposal": prop,
                                   "reply_date": verdict.get("reply_date"), "summary": verdict.get("summary")})
         outreach_store.upsert_account_state(acct, st)
+        bitable_rows.append(_bitable_row(acct, st))
 
-    # ── Core:Breeze 数 deal(HubSpot 无赢单列)→ core_tier(won→T0/T1)→ 按 tier 判维护到点 ──
+    # ── Core:Breeze 数 deal(HubSpot 无赢单列)→ core_tier(won→T0/T1;list质量取 Ned 手写)→ 判维护 ──
     core_due = []
     for c in core_todo:
         name = c["name"]
@@ -201,17 +228,31 @@ def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = 
         ds = breeze_outreach.ask_deal_summary(browser, name, website=rec.get("company_domain"), logger=logger)
         won = (ds.get("parsed") or {}).get("won", 0)
         openn = rec.get("num_open_deals") or (ds.get("parsed") or {}).get("open", 0)
-        tier = grading.core_tier(won, open_deals=openn)         # list_quality 暂缺(Bitable note 未接)
+        lq = (disp.get(outreach_store._norm(name)) or {}).get("list质量")   # Ned 手写的 list 质量
+        tier = grading.core_tier(won, open_deals=openn, list_quality=lq)
         due = outreach_state.core_maintenance_due(
             c.get("last_activity"), tier=tier if tier in ("T0", "T1", "T2") else None, today=today)
-        outreach_store.upsert_account_state(name, {
-            "state": "core", "tier": tier, "won": won, "maintain_due": due,
-            "view": MAINTAIN_VIEW if due else None})            # 只有到点的进"维护到点"view
+        st_core = {"state": "core", "tier": tier, "won": won, "maintain_due": due,
+                   "view": MAINTAIN_VIEW if due else None}      # 只有到点的进"维护到点"view
+        outreach_store.upsert_account_state(name, st_core)
+        bitable_rows.append(_bitable_row(name, st_core))
         if due:
             core_due.append(name)
 
     if proposals:
         cls.save_proposals(proposals)                          # 回复提议进待确认库(不自动写)
+
+    # ── 驾驶舱:把本轮各账户状态 upsert 进 Bitable(只写贾维斯列,不碰 Ned 手写的 list质量/处置)──
+    bitable_res = None
+    if bitable_rows and apply:                                 # dry-run 不写 Bitable(读处置不算写)
+        try:
+            from prospecting import bitable_client as bc
+            if bc._cfg()[0]:
+                bitable_res = bc.upsert_accounts(bitable_rows)
+        except Exception as e:
+            bitable_res = {"error": str(e)}
+            if logger:
+                logger.warning("bitable upsert 失败(跳过):%s", e)
 
     # ── 从 store 【累积】汇总各段,写进对应 HubSpot view(名单法)──
     def _write(url, names, ap):
@@ -224,6 +265,7 @@ def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = 
         "processed_prospecting": len(pros_todo), "processed_core": len(core_todo),
         "reply_proposals": len(proposals), "core_due": len(core_due),
         "nameless_count": len(nameless), "breeze_errors": errors,
+        "bitable": bitable_res,
         "cumulative_segments": {k: len(v) for k, v in cumulative.items()},
         "applied": applied, "applied_mode": "APPLY" if apply else "dry-run",
     }
