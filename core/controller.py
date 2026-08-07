@@ -154,6 +154,11 @@ def _network_capability_note() -> str:
                  "返回的数据作答。涉及最新/实时信息时，明确说明你无法联网核实，不要编造。"]
     if caps.vision:
         parts.append("【视觉能力】你当前的模型支持图片输入，可以直接看用户发来的图片作答。")
+    else:
+        parts.append("【视觉能力】你当前的模型【不支持】直接看图片。用户给你图片路径要做开放式"
+                     "理解（不是证件/文档结构化提取）时，调用 describe_image 工具"
+                     "（会自动路由到配置好的视觉模型）；证件/文档类用 ingest_credential_image /"
+                     "ingest_document_file（OCR）。")
     return " ".join(parts)
 
 

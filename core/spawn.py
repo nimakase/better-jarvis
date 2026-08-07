@@ -70,11 +70,12 @@ class SpawnResult:
         return "\n".join(p for p in parts if p)
 
 
-def _subagent_model() -> str:
-    """子 agent 用的模型：env JARVIS_SUBAGENT_MODEL 可覆盖（如指到轻模型省钱），
-    默认空 = 跟主线程同一个 config.CLAUDE_MODEL。"""
-    import os
-    return os.environ.get("JARVIS_SUBAGENT_MODEL", "")
+def _subagent_model(purpose: str = "default") -> str:
+    """子 agent 用的模型：查 core/model_routing 按用途路由（任务 #20）。
+    purpose="default" 等价于此前唯一支持的 env JARVIS_SUBAGENT_MODEL 覆盖——
+    未传 purpose 时行为完全不变。留空 = 跟主线程同一个 config.CLAUDE_MODEL。"""
+    from core import model_routing
+    return model_routing.model_for(purpose)
 
 
 # ── 白名单推导（⑧）──────────────────────────────────────────────────────────
@@ -144,6 +145,7 @@ async def spawn(task: str, *, label: str = "", extra_tools: Optional[list] = Non
                 max_rounds: int = DEFAULT_MAX_ROUNDS,
                 timeout_s: float = DEFAULT_TIMEOUT_S,
                 contract: bool = True,
+                purpose: str = "default",
                 _controller=None) -> SpawnResult:
     """把 task 交给一个隔离的子 agent，拿回契约化结果。
 
@@ -151,6 +153,8 @@ async def spawn(task: str, *, label: str = "", extra_tools: Optional[list] = Non
     - contract：True（默认）注入结果契约并解析 JSON；False = 自由文本模式——
       调用方要的是子 agent 的完整原始输出（如 self_review 的提案数组），
       从 raw_text 取，不注入契约、不按契约解析。
+    - purpose：按 core/model_routing 选子 agent 模型（任务 #20），默认 "default"
+      与此前唯一行为等价。代码审查类子任务可传 "code_review" 之类的用途标签。
     - _controller：测试注入口（生产不传，内部按白名单新建后台 controller）。
     """
     label = label or (task[:20] + "…" if len(task) > 20 else task)
@@ -161,7 +165,7 @@ async def spawn(task: str, *, label: str = "", extra_tools: Optional[list] = Non
             interactive=False,
             allowed_tools=build_whitelist(extra_tools),
             max_tool_rounds=max_rounds,
-            model=_subagent_model(),
+            model=_subagent_model(purpose),
         )
     else:
         ctl = _controller
