@@ -107,6 +107,34 @@ def make_customer_loop_runtime(view_url: str, apply: bool):
     return run_step, close
 
 
+def _incremental_insights_note(res: dict) -> str:
+    """任务 #21：对增量夜跑结果做一次通用再分析，补上容易被现有文案漏掉的数字
+    （held_count/池成员变动此前压根没进通知文本）。不需要懂具体业务规则，纯粹是
+    "这个数字非零就该被看见"这类通用判断——拆成独立函数是为了能脱离整套浏览器
+    runtime 单测（notify() 本身嵌在 _build_customer_loop_nightly() 里，构造它会
+    触发真实 Playwright/HubSpot 依赖）。返回空串表示没有可补充的观察。"""
+    from core import insight as _insight
+
+    insight_data = {
+        **res,
+        "池_离开_数量": len(res.get("池_离开") or []),
+        "池_进入_数量": len(res.get("池_进入") or []),
+    }
+    ins = _insight.analyze(insight_data, thresholds=[
+        {"field": "held_count", "gt": 0,
+         "message": "{value} 个账户因算到 cold/dead 会触发不可逆的 HubSpot "
+                    "reset 工作流，已被护栏挂起未自动写，等待人工复核",
+         "severity": "warning"},
+        {"field": "池_离开_数量", "gt": 0,
+         "message": "{value} 个账户从池里消失了(可能被工作流 reassign/reset "
+                    "挪走，也可能是手动放弃)，值得确认是否符合预期",
+         "severity": "notice"},
+        {"field": "池_进入_数量", "gt": 0,
+         "message": "{value} 个新账户进了池", "severity": "info"},
+    ])
+    return _insight.render(ins)
+
+
 def _build_customer_loop_nightly():
     view_url = _view_url()
     apply = _apply_enabled()
@@ -144,6 +172,14 @@ def _build_customer_loop_nightly():
                 content = (f"客户循环·增量:更新 priority {res.get('changed', 0)} 个"
                            + (f";另有 {fc} 个你手动设的与规则不符(仅提示、未改,详见分歧提示)" if fc else "")
                            + "。")
+                # 任务 #21：通用再分析——不改变上面的主结论，只额外看一眼容易被
+                # 现有文案漏掉的数字。出错也绝不能拖垮夜间通知投递本身。
+                try:
+                    note = _incremental_insights_note(res)
+                    if note:
+                        content += "\n\n" + note
+                except Exception:
+                    pass
             sev = "normal"
         r = _delivery.deliver(track="customer_loop", title="🔁 客户循环夜间作业",
                               content=content, severity=sev)
