@@ -27,8 +27,11 @@ COLUMN_CANDIDATES: Dict[str, List[str]] = {
     "existing_priority": ["priority"],
     "num_associated_deals": ["number of associated deals", "associated deals"],
     "num_open_deals": ["number of open deals", "open deals"],
+    "num_won_deals": ["number of closed won deals", "closed won deals", "won deals"],  # v2:Core 分层 T0/T1
     "last_activity_date": ["last activity date", "last activity"],
     "last_engagement_date": ["last engagement date", "last engagement"],
+    "decay_stage": ["decay stage"],   # v2:死线钟(Prospecting 的公司 time-decay 阶段)
+    "company_domain": ["company domain name", "domain name", "website url", "domain"],  # v2:Breeze 消歧
     "create_date": ["create date"],   # 可选:分批游标用
 }
 
@@ -122,6 +125,12 @@ def _row_complete(raw: Dict[str, str], cols: Dict[str, str]) -> bool:
     return all(raw.get(f, "") != "" for f in _COMPLETE_FIELDS if f in cols)
 
 
+def _clean_text_cell(text: str) -> Optional[str]:
+    """字符串型单元格:空/-- → None,否则 strip 后返回(供 decay_stage / domain)。"""
+    t = (text or "").strip()
+    return None if t in ("", "--") else t
+
+
 def _parse_raw(raw: Dict[str, str]) -> dict:
     return {
         "account_name": raw.get("account_name", ""),
@@ -129,8 +138,11 @@ def _parse_raw(raw: Dict[str, str]) -> dict:
         "existing_priority": parse_priority(raw.get("existing_priority", "")),
         "num_associated_deals": parse_int_cell(raw.get("num_associated_deals", "")),
         "num_open_deals": parse_int_cell(raw.get("num_open_deals", "")),
+        "num_won_deals": parse_int_cell(raw.get("num_won_deals", "")),   # v2
         "last_activity_date": raw.get("last_activity_date") or None,
         "last_engagement_date": raw.get("last_engagement_date") or None,
+        "decay_stage": _clean_text_cell(raw.get("decay_stage", "")),     # v2:原样透传
+        "company_domain": _clean_text_cell(raw.get("company_domain", "")),  # v2:Breeze 消歧用
         "create_date": raw.get("create_date") or None,
     }
 

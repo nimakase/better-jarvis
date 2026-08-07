@@ -61,15 +61,33 @@ def apply_segments(segments: dict,
 MAINTAIN_VIEW = "维护到点"          # core 维护段的 view 名(view_url_map 的键)
 
 
+def is_valid_account_name(name) -> bool:
+    """账户名是否可用:非空、非 HubSpot 的 '--' 占位、且含至少一个字母数字。
+
+    导入信息缺失时 account name 会渲染成 '--' —— 这类账户【无名、不可寻址】(名单法按名定位 view),
+    必须剔除出处理流,否则会被当成名叫 '--' 的真账户去问 Breeze、并把 '--' 写进 view 过滤器(垃圾)。
+    """
+    s = "".join(str(name or "").split()).strip()
+    if s in ("", "--"):
+        return False
+    return any(ch.isalnum() for ch in s)
+
+
+def nameless_accounts(records: list) -> list:
+    """挑出导入缺名(account_name 为空 / '--' / 纯符号)的账户记录 —— 无法进任何 view,
+    要【单独上报】让 Ned 补名或重导,不进 prospecting/core。返回原始记录列表。"""
+    return [r for r in (records or []) if not is_valid_account_name(r.get("account_name"))]
+
+
 def split_accounts(records: list):
     """把读取到的账户记录分成 (prospecting 账户名列表, core 账户[{name,last_activity}])。
 
-    用 account_grading.classify 判 type(有 deal → core)。纯逻辑,可单测。
+    用 account_grading.classify 判 type(有 deal → core)。缺名账户(见 is_valid_account_name)剔除。纯逻辑,可单测。
     """
     prospecting, core = [], []
     for r in records:
         name = (r.get("account_name") or "").strip()
-        if not name:
+        if not is_valid_account_name(name):
             continue
         if grading.classify(r)["type"] == "core":
             core.append({"name": name, "last_activity": r.get("last_activity_date")})
@@ -103,7 +121,8 @@ def run(browser, accounts: list, view_url_map: dict,
 
 
 def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = None,
-                   apply: bool = False, limit: Optional[int] = None, today=None, logger=None) -> dict:
+                   apply: bool = False, limit: Optional[int] = None, resume: bool = True,
+                   today=None, logger=None) -> dict:
     """夜跑主编排:读全书 → 分 prospecting/core → Breeze 抽 outreach 算冷开发段 +
     core 维护段 → 各段名单写进对应 view。view_url_map: {段名: view_url}(段名见 outreach_state.VIEW_NAME
     + "维护到点")。apply=False 全程 dry-run(不改 view)。limit 限 prospecting 数量(冷启动分批)。
@@ -132,22 +151,32 @@ def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = 
                 "read": f"{report.get('total')}/{report.get('expected_total')}"}
 
     prospecting, core = split_accounts(report.get("records", []))
+
+    # 断点续跑:跳过 store 里已算过的 prospecting(崩了/分批重跑时接着来,不重复问 Breeze)。
+    todo = prospecting
+    if resume:
+        done = set(outreach_store.all_states().keys())
+        todo = [a for a in prospecting if outreach_store._norm(a) not in done]
     if limit:
-        prospecting = prospecting[:limit]
+        todo = todo[:limit]
 
     def _ask(acct):
         return breeze_outreach.ask_breeze(browser, acct, logger=logger).get("contacts", [])
 
-    segments = compute_segments(prospecting, _ask, persist=True, today=today)
+    compute_segments(todo, _ask, persist=True, today=today)   # 逐账户算+即时存 store(返回值不用)
 
+    # core 维护到点也入 store(供累积写 view;core 不用 Breeze)
     due = core_maintenance_segment(core, today=today)
-    if due:
-        segments.setdefault(MAINTAIN_VIEW, []).extend(due)
+    for name in due:
+        outreach_store.upsert_account_state(name, {"state": "core_maintain", "view": MAINTAIN_VIEW})
 
     def _write(url, names, ap):
         return view_writer.set_view_membership(browser, url, names, apply=ap, logger=logger)
 
-    applied = apply_segments(segments, lambda v: view_url_map.get(v), _write, apply=apply)
-    return {"prospecting": len(prospecting), "core_total": len(core), "core_due": len(due),
-            "segments": {k: len(v) for k, v in segments.items()},
+    # 从 store 【累积】汇总各段(含历史已处理),写进 view —— 分批/重跑也能拿到完整名单。
+    cumulative = outreach_store.accounts_by_view()
+    applied = apply_segments(cumulative, lambda v: view_url_map.get(v), _write, apply=apply)
+    return {"prospecting_total": len(prospecting), "processed_this_run": len(todo),
+            "core_total": len(core), "core_due": len(due),
+            "cumulative_segments": {k: len(v) for k, v in cumulative.items()},
             "applied": applied, "applied_mode": "APPLY" if apply else "dry-run"}

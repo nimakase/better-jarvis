@@ -43,7 +43,7 @@ check("候选不含从无的", "Never" not in cands)
 # ── 提议编排:none 跳过、有回复出提议 ──────────────────
 def fake_classify(acct):
     if acct == "Fresh":
-        return {"category": rr.INTERESTED_NO_STOCK, "reply_date": "2026-07-25",
+        return {"category": rr.INTERESTED_LATER, "reply_date": "2026-07-25",
                 "stock_wake_days": 120, "summary": "no stock, Q4"}
     return None   # 其余无回信
 

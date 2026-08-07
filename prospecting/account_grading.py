@@ -217,3 +217,35 @@ def build_write_plan(report: dict) -> dict:
         "counts": {"auto": len(auto), "manual_demote": len(manual_demote),
                    "recent_hold": len(recent_hold)},
     }
+
+
+# ── Core 价值分层(v2:T0/T1/T2/active;供优先级 + 维护间隔)──────────────
+# 说明:HubSpot Account Type(Core/Prospecting)由 Ned 手动设、贾维斯只读;这里的分层是
+# 贾维斯侧的【价值判断】,只用于排优先级 + 定维护间隔,不写回 HubSpot。list 质量来自 Ned 在
+# Bitable 手写的 note(经 LLM 归成 good/weak/junk),不是这里能从账户级字段自动判的。
+CORE_T0_MIN_WON = 3          # closed-won deal ≥ 此值 = T0 长期伙伴;1~2 = T1 低频出货
+
+
+def core_tier(won_count, open_deals: int = 0, list_quality: Optional[str] = None) -> str:
+    """给一个 core 账户定分层(纯逻辑)。返回 T0 / T1 / active / T2 / review / not_core。
+
+    won_count:    该账户 closed-won deal 数(account_reader 新读的列)。
+    open_deals:   进行中 deal 数。
+    list_quality: Ned 在 Bitable 手写 note、经 LLM 归出的 "good"/"weak"/"junk";None=还没判。
+    逻辑:多 won→T0;1~2 won→T1;没 won 但有进行中→active(推进成交,非维护);
+          都没有(lost/从没成)→ 看 list 质量:good→T2;weak/junk→not_core(L5/L6);未判→review。
+    """
+    won = int(won_count or 0)
+    op = int(open_deals or 0)
+    if won >= CORE_T0_MIN_WON:
+        return "T0"
+    if won >= 1:
+        return "T1"
+    if op > 0:
+        return "active"
+    lq = (list_quality or "").strip().lower()
+    if lq == "good":
+        return "T2"
+    if lq in ("weak", "junk"):
+        return "not_core"
+    return "review"

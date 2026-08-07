@@ -50,22 +50,38 @@ def main() -> int:
         browser.start(run_mode="interactive")
 
     try:
+        from prospecting import breeze
         browser.page.goto(DEFAULT_VIEW_URL, wait_until="domcontentloaded")
         browser.page.wait_for_timeout(2000)
-        print(f"[reply] 让 Breeze 读「{account}」的最新回信并分类…(约 10-60s)")
-        d = rc.classify(browser.page, account, logger=logger, timeout_s=90)
-        if d is None:
-            print("[reply] 结果:无入站回信 / 未分类(None)。")
+
+        # 步骤①:Breeze 抽事实(不判类别)
+        print(f"[reply] 步骤① 让 Breeze 抽「{account}」最新回信的事实…(约 10-60s)")
+        res = breeze.ask(browser.page, rc.build_extract_prompt(account), logger=logger, timeout_s=90)
+        fact = rc.parse_extract(res.get("text", ""))
+        if fact is None:
+            print("[reply] 步骤①:无入站回信(found:false)。若确有回信,把 raw 贴回来:")
+            print("  raw:", (res.get("text") or "")[:500])
             return 0
-        print("\n===== 分类结果 =====")
-        for k, v in d.items():
+        print("\n===== 步骤① Breeze 抽的事实 =====")
+        for k, v in fact.items():
             print(f"  {k}: {v}")
-        prop = rr.route(d["category"], stock_wake_days=d.get("stock_wake_days"),
+
+        # 步骤②:贾维斯自己的 LLM 判类别
+        print("\n[reply] 步骤② 贾维斯 LLM 判类别…")
+        verdict = rc.classify_reply_text(fact["reply_text"], account)
+        if verdict is None:
+            print("[reply] 判成 none —— OOO/自动回复/无实质(或 LLM 未配)→ 非真回复,不生成提议。")
+            print("        (若这条其实是真回复被误判,说明 LLM 侧要调;若 LLM 没配会静默降级成 None)")
+            return 0
+        print("\n===== 步骤② 贾维斯 LLM 判类别 =====")
+        for k, v in verdict.items():
+            print(f"  {k}: {v}")
+        prop = rr.route(verdict["category"], stock_wake_days=verdict.get("stock_wake_days"),
                         account_name=account)
         print("\n===== 路由提议(将进日报待确认,不自动写)=====")
         for k, v in prop.items():
             print(f"  {k}: {v}")
-        print("\n[reply] ✅ 读→分级→提议 全链路通(只读,未写)。")
+        print("\n[reply] ✅ 抽事实→LLM 判→提议 全链路通(只读,未写)。")
         return 0
     except Exception as e:
         print(f"[reply] ❌ 失败:{type(e).__name__}: {e}")

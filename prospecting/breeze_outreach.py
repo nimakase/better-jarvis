@@ -10,20 +10,40 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Optional
 
 
 # ── 提问模板 ──────────────────────────────────────────────────
-def build_prompt(account_name: str) -> str:
+def _exact_guard(account_name: str, website: Optional[str] = None) -> str:
+    """开头的"直接指定 + 禁反问"句(消歧,防重名弹复核卡死)。outreach / deal 两个 prompt 共用。
+
+    ⚠ 措辞刻意【不含】"several companies / disambiguate / which / 问号"等词:这段 prompt 会被
+       回显进页面,若含这些词会命中 looks_like_disambiguation 造成【自我误判】(Photron 实盘教训 2026-08-05)。
+    """
+    site = f' (website: {website})' if website else ''
+    return (
+        f'The account named "{account_name}"{site} is the exact, already-identified company; '
+        f'answer only about this one. If no company is named exactly "{account_name}", return found:false. '
+        f'Give the answer directly and do not ask me any question. '
+    )
+
+
+def build_prompt(account_name: str, website: Optional[str] = None) -> str:
     """给 Breeze 的问题:只要事实,固定 JSON 输出。
 
     ⚠ 必须【单行、无换行】—— 聊天输入框里换行=回车=提前发送(会把 prompt 打断成好几条)。
+
+    开头加【直接指定 + 禁反问】句:重名时 Breeze 会弹"你指 A 还是 B?"复核 → 脚本等不到 JSON
+    卡到超时 → 空 → 误判 not_started(= 401 误标诱因之一)。这里明确禁止它反问/消歧,只认精确名;
+    有 website 则一并给出,消歧更狠。见 docs/客户循环-view管理重设计.md 附三 B。
     """
-    return (
+    return _exact_guard(account_name, website) + (
         f'For the company account "{account_name}", list every cold-outreach email sent BY '
         f'Alex Test to its contacts (usually 3 emails sharing the same subject line). For each give: '
         f'date, subject, recipient contact name, and the recipient\'s job title if known. Also list '
-        f'the names of any contacts at this company who have REPLIED to Ned. Exclude replies '
-        f'themselves and any email not sent by Ned. Reply with ONLY one-line JSON (no line breaks, '
+        f'the names of any contacts at this company who have sent ANY inbound message back to Ned '
+        f'(just report the fact that they replied; do not judge whether it is substantive). '
+        f'Exclude replies themselves and any email not sent by Ned. Reply with ONLY one-line JSON (no line breaks, '
         f'no other text) in this shape: '
         f'{{"account":"{account_name}","found":true,'
         f'"outreach_emails":[{{"date":"YYYY-MM-DD","subject":"","to_contact":"","job_title":""}}],'
@@ -115,6 +135,71 @@ def parse_response(text: str) -> dict:
     return {"account": "", "found": False, "outreach_emails": [], "replied_contacts": []}
 
 
+# ── 复核提问检测(供 ask_breeze 安全网:识别重名弹的消歧问句,别被它卡到超时)──────────
+_DISAMBIG_PAT = re.compile(
+    r"did you mean|do you mean|which (company|one|account|of these)|"
+    r"multiple companies|several companies|more than one (company|match|result)|"
+    r"could you (confirm|clarify|specify)|please (confirm|clarify|specify|choose|pick)|i found (a few|several|multiple)",
+    re.I)
+_CLARIFY_IMPERATIVE = re.compile(r"please (confirm|clarify|specify|choose|pick)", re.I)
+
+
+def looks_like_disambiguation(text: str) -> bool:
+    """Breeze 是否在反问消歧(重名时)。判据:命中消歧措辞、没解析出真答案、【且是真问句或明确祈使澄清】。
+
+    ⚠ 关键:真复核是问句('?')或"please specify"这类明确祈使。我们自己的 guard prompt 是祈使句、
+       无问号、无 please,会被回显进页面 —— 若只看措辞就会【自我误判】(Photron 教训 2026-08-05),
+       故额外要求 '?' 或 please-祈使。识别到真复核时自动澄清一次/带错误退出,不静默返空。
+    """
+    if not text:
+        return False
+    if parse_response(text).get("outreach_emails"):
+        return False                     # 已经有真答案 → 不是消歧
+    if not _DISAMBIG_PAT.search(text):
+        return False
+    return ("?" in text) or bool(_CLARIFY_IMPERATIVE.search(text))
+
+
+# ── 问 Breeze:账户 deal 结果计数(HubSpot 没有"赢单数"原生列 → 走 Breeze 真 CRM 工具)─────
+def build_deal_prompt(account_name: str, website: Optional[str] = None) -> str:
+    """问某账户的 deal 按结果计数(won/lost/open)。用于 Core 分层(T0 多 won / T1 1~2 won)。
+
+    ⚠ 单行、无换行(聊天框换行=发送)。占位符用 <...> 让示例【不是合法 JSON】,免得回显被当答案。
+    """
+    return _exact_guard(account_name, website) + (
+        f'For the company account "{account_name}", count its deals by OUTCOME using the CRM. '
+        f'Reply with ONLY one-line JSON (no line breaks, no other text): '
+        f'{{"account":"{account_name}","found":true,'
+        f'"won":<number of closed-won deals>,"lost":<number of closed-lost deals>,'
+        f'"open":<number of open/in-progress deals>}} '
+        f'If it has no deals at all, return found:false with won/lost/open all 0.'
+    )
+
+
+def _has_deal_json(text: str) -> bool:
+    """文本里是否已出现带 won/lost/open 键的真 JSON(轮询"数据到了"的谓词)。"""
+    for obj in _iter_json_objects(_normalize_quotes(text)):
+        if isinstance(obj, dict) and any(k in obj for k in ("won", "lost", "open")):
+            return True
+    return False
+
+
+def parse_deal_summary(text: str) -> dict:
+    """从 Breeze 文本挑出 deal 计数 JSON。返回 {account,found,won,lost,open};没有→found:false 全 0。"""
+    def _i(v):
+        try:
+            return int(v)
+        except Exception:
+            return 0
+    for obj in _iter_json_objects(_normalize_quotes(text)):
+        if isinstance(obj, dict) and any(k in obj for k in ("won", "lost", "open")):
+            return {"account": obj.get("account", ""),
+                    "found": bool(obj.get("found", True)),
+                    "won": _i(obj.get("won", 0)), "lost": _i(obj.get("lost", 0)),
+                    "open": _i(obj.get("open", 0))}
+    return {"account": "", "found": False, "won": 0, "lost": 0, "open": 0}
+
+
 # ── 邮件列表 → 按联系人聚合(outreach_state 的输入)──────────────
 def _norm(s) -> str:
     return " ".join(str(s or "").split()).strip().lower()
@@ -176,18 +261,114 @@ def _visible_input(page):
     return frame, None
 
 
-def ask_breeze(browser, account_name: str, timeout_ms: int = 180000, logger=None) -> dict:
+COMPLETION_MARKER = "Thinking complete"     # Breeze 完成推理的标记(比"稳定超时"可靠得多)
+
+
+def _reset_conversation(frame, page):
+    """在已有对话里就点 Back 回到空白输入(=新对话)。返回刷新后的 (frame, inp)。"""
+    try:
+        back = frame.locator(COPILOT_HEADER).get_by_text("Back", exact=True)
+        if back.count() > 0:
+            back.first.click(timeout=3000)
+            page.wait_for_timeout(1200)
+    except Exception:
+        pass
+    return _visible_input(page)
+
+
+def _submit(page, frame, inp, text_to_type: str) -> None:
+    """把一段文本填进输入框并发送(填 prompt / 填消歧澄清 共用)。"""
+    inp.click(timeout=8000)
+    page.wait_for_timeout(300)              # 稍等,让面板/输入就绪
+    # ⚠ press_sequentially 会【先聚焦 locator 再逐字输入】—— 根除"没聚焦就打字导致首字符丢"的竞态
+    #    (Photron 实盘:page.keyboard.type 丢了开头 "Use e" / "T")。逐字带小 delay 让 ProseMirror 跟上。
+    typed = False
+    try:
+        inp.press_sequentially(text_to_type, delay=8, timeout=45000)
+        typed = True
+    except Exception:
+        pass
+    if not typed:                          # 兜底:老接口(尽量先聚焦)
+        try:
+            inp.focus(timeout=2000)
+        except Exception:
+            pass
+        page.wait_for_timeout(150)
+        page.keyboard.type(text_to_type)
+    page.wait_for_timeout(900)              # 等 ProseMirror 注册文本、发送键可用
+    send = frame.locator(COPILOT_SEND).first
+    try:
+        send.wait_for(state="visible", timeout=4000)
+        if send.is_enabled():
+            send.click(timeout=4000)
+        else:
+            page.keyboard.press("Enter")
+    except Exception:
+        page.keyboard.press("Enter")
+
+
+def _outreach_ready(text: str) -> bool:
+    return bool(parse_response(text).get("outreach_emails"))
+
+
+def _send_and_poll(page, frame, inp, prompt: str, timeout_ms: int,
+                   account_name: Optional[str] = None, data_ready=None) -> tuple:
+    """填 prompt、发送、轮询直到 Breeze 完成/拿到真数据。返回 (原始文本, status)。
+
+    data_ready(text)->bool:判"已拿到目标 JSON"的谓词(不同问题 JSON 形状不同);默认=有 outreach_emails。
+    status: "ok" | "disambiguation"(重名反问、自动澄清一次仍在问)。
+    安全网:识别到复核问句(looks_like_disambiguation)→ 自动回一句"用精确名、别再问"【仅一次】;
+    再问则带 status=disambiguation 退出(交由调用方记明确错误,绝不静默返空被误判 not_started)。
+    """
+    data_ready = data_ready or _outreach_ready
+    _submit(page, frame, inp, prompt)
+    prev, stable_n, waited, text = "", 0, 0, ""
+    disambig_retried = False
+    while waited < timeout_ms:
+        page.wait_for_timeout(2000)
+        waited += 2000
+        try:
+            text = frame.locator("body").inner_text(timeout=3000)
+        except Exception:
+            text = ""
+        stable_n = stable_n + 1 if text == prev else 0
+        if data_ready(text) and stable_n >= 1:
+            return text, "ok"                # 真数据 + 稳定 → 立刻返回
+        if account_name and stable_n >= 1 and looks_like_disambiguation(text):
+            if not disambig_retried:         # 复核问句 → 自动澄清一次
+                disambig_retried = True
+                clar = (f'Use exactly "{account_name}". Do not ask again; '
+                        f'if there is no exact match, return found:false.')
+                _submit(page, frame, inp, clar)
+                prev, stable_n, waited = "", 0, 0   # 重置,等新答复(给足新一轮超时)
+                continue
+            return text, "disambiguation"    # 澄清后还在问 → 认栽,带状态退出
+        if COMPLETION_MARKER in text and stable_n >= 1:
+            return text, "ok"                # Breeze 完成且稳定(可能真没 outreach)
+        if stable_n >= 20 and waited >= 60000:
+            return text, "ok"                # 最后兜底:没出现完成标记也别死等
+        prev = text
+    return text, "ok"
+
+
+def ask_breeze(browser, account_name: str, website: Optional[str] = None,
+               timeout_ms: int = 180000, retries: int = 1, logger=None) -> dict:
     """驱动 HubSpot Copilot(iframe)问一个账户的 outreach → 解析成结构化。
 
-    开面板(若未开)→ 等 iframe → frame 内填 prompt、发送 → 轮询 frame 文本直到出现含
-    outreach_emails 的 JSON 且稳定 → parse_response → emails_to_contacts。返回 {"parsed","contacts","raw"}。
+    每账户起【新对话】;用 "Thinking complete" 判完成(不靠稳定超时瞎猜,避免思考停顿被误判成完成);
+    抽到空则**重问一次**(Breeze 偶发失败兜底),两次都空才认定真没有。
+    website 有则注入 prompt 帮消歧。重名反问经安全网自动澄清;仍卡则返回带 error="needs_disambiguation"
+    (【不是】空 not_started —— 见 401 教训)。返回 {"parsed","contacts","raw","attempts","error"?}。
     """
+    if not account_name or str(account_name).strip() in ("", "--"):
+        return {"parsed": parse_response(""), "contacts": [], "raw": "", "attempts": 0,
+                "error": "invalid_account_name"}   # 导入缺名 → 别问 Breeze
     page = browser.page
-    prompt = build_prompt(account_name)
+    prompt = build_prompt(account_name, website=website)
 
-    # ⚠ chatspot iframe 面板关着也在 DOM 里,不能靠 iframe 在不在判断面板开没开 —— 要看【输入框可见】。
+    # ⚠ chatspot iframe 面板关着也在 DOM 里,不能靠 iframe 在不在判断 —— 要看【输入框可见】。
     frame, inp = _visible_input(page)
-    if inp is None:                         # 面板没开(或输入不可见)→ 点启动按钮
+    if inp is None:                         # 面板没开 → 点启动按钮,等输入可见
         try:
             page.locator(COPILOT_LAUNCHER).first.click(timeout=6000)
         except Exception:
@@ -199,57 +380,85 @@ def ask_breeze(browser, account_name: str, timeout_ms: int = 180000, logger=None
                 page.wait_for_timeout(600)
                 break
     if inp is None or frame is None:
-        return {"parsed": parse_response(""), "contacts": [], "raw": "",
+        return {"parsed": parse_response(""), "contacts": [], "raw": "", "attempts": 0,
                 "error": "copilot 面板未打开/输入框不可见(启动按钮选择器?)"}
 
-    # ★ 每个账户起【新对话】:若在已有对话里(chat-header 有 "Back")→ 点 Back 回到空白输入。
-    #   否则历史会越堆越长、Breeze 被上下文串台,且扫文本会读到旧账户的 JSON。
-    try:
-        back = frame.locator(COPILOT_HEADER).get_by_text("Back", exact=True)
-        if back.count() > 0:
-            back.first.click(timeout=3000)
-            page.wait_for_timeout(1200)
-            frame, inp2 = _visible_input(page)
-            inp = inp2 or inp
-    except Exception:
-        pass
-
-    inp.click(timeout=8000)
-    page.keyboard.type(prompt)              # 单行 prompt,不会中途触发发送;Back 已给空输入,无需再清
-    page.wait_for_timeout(900)              # 等 ProseMirror 注册文本、发送键变可用
-    send = frame.locator(COPILOT_SEND).first
-    try:
-        send.wait_for(state="visible", timeout=4000)
-        if send.is_enabled():
-            send.click(timeout=4000)
-        else:
-            page.keyboard.press("Enter")
-    except Exception:
-        page.keyboard.press("Enter")
-
-    prev, stable, waited, parsed = "", 0, 0, None
-    text = ""
-    while waited < timeout_ms:
-        page.wait_for_timeout(2000)
-        waited += 2000
-        try:
-            text = frame.locator("body").inner_text(timeout=3000)
-        except Exception:
-            text = ""
-        stable = stable + 1 if text == prev else 0
-        cand = parse_response(text)          # 已跳过 prompt 回显模板
-        if cand.get("outreach_emails") and text == prev:
-            parsed = cand                    # 拿到真数据且稳定 → 立刻返回(正路)
-            break
-        # 兜底(仅给"真没 outreach"的账户):要稳定够久 + 等够久,才认定完成。
-        # 阈值放宽是为了熬过 Breeze 开始输出前的"思考停顿"(否则会把停顿误判成完成)。
-        if stable >= 12 and waited >= 45000:
-            parsed = cand
-            break
-        prev = text
+    parsed, text, attempt, status = None, "", 0, "ok"
+    for attempt in range(retries + 1):
+        frame, inp = _reset_conversation(frame, page)      # 新对话
+        if inp is None:
+            frame, inp = _visible_input(page)
+            if inp is None:
+                break
+        text, status = _send_and_poll(page, frame, inp, prompt, timeout_ms, account_name=account_name)
+        parsed = parse_response(text)
+        if parsed.get("outreach_emails"):
+            status = "ok"
+            break                            # 拿到数据即可;否则重问一次兜底
+        if status == "disambiguation":
+            break                            # 消歧没解决,重问也白搭 → 带 error 退出,别当 not_started
     parsed = parsed or parse_response(text)
+    out = {"parsed": parsed, "contacts": emails_to_contacts(parsed), "raw": text, "attempts": attempt + 1}
+    if status == "disambiguation" and not parsed.get("outreach_emails"):
+        out["error"] = "needs_disambiguation"    # ⚠ 编排层遇此【别持久化为 not_started】,拎出让 Ned 看
     if logger:
-        logger.info("breeze_outreach | %s | found=%s emails=%d replied=%d",
+        logger.info("breeze_outreach | %s | found=%s emails=%d replied=%d attempts=%d status=%s",
                     account_name, parsed.get("found"),
-                    len(parsed.get("outreach_emails", [])), len(parsed.get("replied_contacts", [])))
-    return {"parsed": parsed, "contacts": emails_to_contacts(parsed), "raw": text}
+                    len(parsed.get("outreach_emails", [])),
+                    len(parsed.get("replied_contacts", [])), attempt + 1, status)
+    return out
+
+
+def ask_deal_summary(browser, account_name: str, website: Optional[str] = None,
+                     timeout_ms: int = 120000, retries: int = 1, logger=None) -> dict:
+    """驱动 Breeze 数某 Core 账户的 deal(won/lost/open)。HubSpot 无原生"赢单数"列,故走 Breeze。
+
+    won 喂 `account_grading.core_tier`(≥3=T0 / 1~2=T1);复用消歧安全网。
+    返回 {"parsed"(=parse_deal_summary), "raw", "attempts", "error"?}。
+    """
+    if not account_name or str(account_name).strip() in ("", "--"):
+        return {"parsed": parse_deal_summary(""), "raw": "", "attempts": 0,
+                "error": "invalid_account_name"}   # 导入缺名 → 别问 Breeze
+    page = browser.page
+    prompt = build_deal_prompt(account_name, website=website)
+
+    frame, inp = _visible_input(page)
+    if inp is None:
+        try:
+            page.locator(COPILOT_LAUNCHER).first.click(timeout=6000)
+        except Exception:
+            pass
+        for _ in range(24):
+            page.wait_for_timeout(500)
+            frame, inp = _visible_input(page)
+            if inp is not None:
+                page.wait_for_timeout(600)
+                break
+    if inp is None or frame is None:
+        return {"parsed": parse_deal_summary(""), "raw": "", "attempts": 0,
+                "error": "copilot 面板未打开/输入框不可见"}
+
+    parsed, text, attempt, status = None, "", 0, "ok"
+    for attempt in range(retries + 1):
+        frame, inp = _reset_conversation(frame, page)
+        if inp is None:
+            frame, inp = _visible_input(page)
+            if inp is None:
+                break
+        text, status = _send_and_poll(page, frame, inp, prompt, timeout_ms,
+                                      account_name=account_name, data_ready=_has_deal_json)
+        parsed = parse_deal_summary(text)
+        if _has_deal_json(text):
+            status = "ok"
+            break
+        if status == "disambiguation":
+            break
+    parsed = parsed or parse_deal_summary(text)
+    out = {"parsed": parsed, "raw": text, "attempts": attempt + 1}
+    if status == "disambiguation" and not _has_deal_json(text):
+        out["error"] = "needs_disambiguation"
+    if logger:
+        logger.info("breeze_deal | %s | found=%s won=%d lost=%d open=%d attempts=%d status=%s",
+                    account_name, parsed.get("found"), parsed.get("won"),
+                    parsed.get("lost"), parsed.get("open"), attempt + 1, status)
+    return out

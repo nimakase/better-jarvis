@@ -22,21 +22,37 @@ def check(name, cond):
         fails.append(name)
 
 
-# prompt 含账户名 + 八类 + 固定字段要求
-pr = rc.build_prompt("Acme Corp")
-check("prompt 含账户名", "Acme Corp" in pr)
-check("prompt 含类别 id", rr.INTERESTED_NO_STOCK in pr and rr.EXPLICIT_NO in pr)
-check("prompt 要 CATEGORY 行", "CATEGORY:" in pr)
+# 步骤①:Breeze 抽事实 prompt —— 只要事实、不判类别、含消歧守卫
+ep = rc.build_extract_prompt("Acme Corp")
+check("extract 单行", "\n" not in ep)
+check("extract 含账户名 + reply_text 字段", "Acme Corp" in ep and "reply_text" in ep)
+check("extract 只抽事实不判类别", "do NOT judge" in ep or "do not judge" in ep)
+check("extract 明确纳入 OOO/自动回复(不预过滤)", "out-of-office" in ep and "auto-reply" in ep)
+check("extract 含精确名守卫、无问号", 'named "Acme Corp"' in ep and "?" not in ep)
+check("extract 无回信 → found:false", "found:false" in ep)
+
+# parse_extract:解析 Breeze 的事实 JSON
+fx = rc.parse_extract('noise {"account":"Acme","found":true,"contact":"Alice","reply_date":"2026-07-20","reply_text":"No stock until Q4"} tail')
+check("parse_extract 出 reply_text", fx and fx["reply_text"] == "No stock until Q4" and fx["contact"] == "Alice")
+check("parse_extract found:false → None", rc.parse_extract('{"found":false}') is None)
+check("parse_extract 空正文 → None", rc.parse_extract('{"found":true,"reply_text":"-"}') is None)
+
+# 步骤②:贾维斯 LLM 分类 prompt —— 含 6 类 + reply_text + none(OOO)指引
+cp = rc.build_classify_prompt("Sorry, not interested.", "Acme Corp")
+check("classify 含类别 id", rr.INTERESTED_LATER in cp and rr.EXPLICIT_NO in cp)
+check("classify 要 CATEGORY 行", "CATEGORY:" in cp)
+check("classify 含 reply_text", "not interested" in cp)
+check("classify 把 OOO 当 none", "out-of-office" in cp)
 
 # 解析:标准输出
-sample = """CATEGORY: interested_no_stock
+sample = """CATEGORY: interested_later
 SUMMARY: They have no surplus right now but expect some in Q4.
 CONTACT: Alice Wang
 REPLY_DATE: 2026-07-20
 STOCK_TIMING: Q4 2026
 COMPETITOR: -"""
 d = rc.parse_classification(sample, today=TODAY)
-check("解析 category", d["category"] == rr.INTERESTED_NO_STOCK)
+check("解析 category", d["category"] == rr.INTERESTED_LATER)
 check("解析 contact", d["contact"] == "Alice Wang")
 check("解析 competitor '-'→None", d["competitor"] is None)
 check("Q4 2026 估成正天数", isinstance(d["stock_wake_days"], int) and d["stock_wake_days"] > 30)

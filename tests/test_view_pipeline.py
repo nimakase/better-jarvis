@@ -94,11 +94,11 @@ TODAY = _date(2025, 6, 1)
 
 def fake_ask(acct):
     data = {
-        "Acct待处理": [   # 最后一封 >14 天、没回
-            {"name": "c1", "sent_dates": ["2025-05-01"], "replied": False},
-            {"name": "c2", "sent_dates": ["2025-05-03"], "replied": False},
+        "Acct待处理": [   # v2:三轮(Jan/Mar/May)跑完、没回 → exhausted
+            {"name": "c1", "sent_dates": ["2025-01-06", "2025-03-07", "2025-05-01"], "replied": False},
+            {"name": "c2", "sent_dates": ["2025-01-08", "2025-03-09", "2025-05-03"], "replied": False},
         ],
-        "Acct开发中": [{"name": "c1", "sent_dates": ["2025-05-28"], "replied": False}],  # 近期
+        "Acct开发中": [{"name": "c1", "sent_dates": ["2025-05-28"], "replied": False}],  # 近期 1 轮=sequencing
         "Acct未开发": [],
         "Acct回复": [{"name": "c1", "sent_dates": ["2025-05-01"], "replied": True}],
     }
@@ -112,7 +112,7 @@ segs = view_manager.compute_segments(["Acct待处理", "Acct开发中", "Acct未
 check("Acct待处理" in segs["待处理·换人或放弃"], f"待处理归位, got {segs}")
 check("Acct开发中" in segs["开发中"], "开发中归位")
 check("Acct未开发" in segs["未开发"], "未开发归位")
-check("Acct回复" in segs["已回复·待跟进"], "回复归位")
+check("Acct回复" in segs["待分类回复"], "有 inbound → 待分类(交 reply_classify 定局)")
 # 持久化 + 未试联系人算对
 st = outreach_store.get_account_state("Acct待处理")
 check(st["untouched_count"] == 1 and st["untouched_contacts"][0]["name"] == "c3", "未试 c3")
@@ -126,18 +126,26 @@ def fake_write(url, names, apply):
 url_map = {"待处理·换人或放弃": "http://view/pending", "未开发": "http://view/new"}  # 没配"已回复"
 res = view_manager.apply_segments(segs, lambda v: url_map.get(v), fake_write, apply=True)
 check(res["待处理·换人或放弃"]["ok"] and written["http://view/pending"][1] is True, "待处理写入")
-check(res["已回复·待跟进"]["ok"] is False and "未配置" in res["已回复·待跟进"]["reason"], "未配置 view 跳过并说明")
+check(res["待分类回复"]["ok"] is False and "未配置" in res["待分类回复"]["reason"], "未配置 view 跳过并说明")
 
 # ── view_manager.split_accounts:按 deal 分 prospecting/core ────
 recs = [
     {"account_name": "CoreCo", "num_associated_deals": 2, "num_open_deals": 0, "last_activity_date": "2025-03-01"},
     {"account_name": "ProspectCo", "num_associated_deals": 0, "num_open_deals": 0, "last_engagement_date": "2025-05-20"},
-    {"account_name": "", "num_associated_deals": 0},   # 无名 → 跳过
+    {"account_name": "", "num_associated_deals": 0},        # 无名 → 跳过
+    {"account_name": "--", "num_associated_deals": 3},      # 导入缺名(--)→ 跳过,别当成核心
 ]
 pros, core = view_manager.split_accounts(recs)
-check(pros == ["ProspectCo"], f"prospecting 分对, got {pros}")
+check(pros == ["ProspectCo"], f"prospecting 分对(--被剔除), got {pros}")
 check(len(core) == 1 and core[0]["name"] == "CoreCo" and core[0]["last_activity"] == "2025-03-01",
-      f"core 分对+带 last_activity, got {core}")
+      f"core 分对+带 last_activity(--不进 core), got {core}")
+
+# ── 缺名剔除:is_valid_account_name / nameless_accounts ─────────
+check(view_manager.is_valid_account_name("Acme") is True, "正常名有效")
+for bad in ("", "  ", "--", " -- ", "---", None):
+    check(view_manager.is_valid_account_name(bad) is False, f"缺名无效: {bad!r}")
+nameless = view_manager.nameless_accounts(recs)
+check(len(nameless) == 2, f"挑出 2 个缺名(''和'--'), got {len(nameless)}")
 
 # ── view_manager.core_maintenance_segment:>2月没 touch ─────────
 core3 = [{"name": "Old", "last_activity": "2025-03-01"},     # 3 月前 → 到点

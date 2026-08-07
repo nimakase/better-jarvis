@@ -93,8 +93,9 @@ def _dump(page, kw: str):
 
 def main() -> int:
     args = sys.argv[1:]
-    if not args or args[0] not in ("breeze", "view", "dump", "cycle"):
-        print('用法: python -m prospecting.view_pipeline_smoketest breeze "<账户名>"'
+    if not args or args[0] not in ("breeze", "deal", "view", "dump", "cycle"):
+        print('用法: python -m prospecting.view_pipeline_smoketest breeze "<账户名>" ["<domain>"]'
+              ' | deal "<账户名>" ["<domain>"]'
               ' | view "<视图URL>" "<账户名>"... | dump breeze|view "<URL>"'
               ' | cycle [apply] [limit=N]')
         return 5
@@ -149,17 +150,45 @@ def main() -> int:
 
         if args[0] == "breeze":
             acct = args[1] if len(args) > 1 else "Insta Elektro"
-            print(f"[probe] Breeze 抽取:{acct} …")
-            res = breeze_outreach.ask_breeze(browser, acct, logger=logger)
+            site = args[2] if len(args) > 2 else None
+            print(f"[probe] Breeze 抽取:{acct}{f' (domain={site})' if site else ''} …")
+            res = breeze_outreach.ask_breeze(browser, acct, website=site, logger=logger)
             p = res["parsed"]
+            if res.get("error"):
+                print("  ⚠ error:", res["error"], "(安全网触发,未静默返空 —— 把 raw 前 600 字贴回来)")
+                print("  raw:", (res.get("raw") or "")[:600])
+                return 0
             print("found:", p.get("found"), "| 邮件数:", len(p.get("outreach_emails", [])),
-                  "| 回信联系人:", p.get("replied_contacts"))
+                  "| 回信联系人:", p.get("replied_contacts"), "| attempts:", res.get("attempts"))
             print("按联系人聚合:")
             for c in res["contacts"]:
                 print(f"  - {c['name']} | 岗位={c.get('job_title')} | {len(c['sent_dates'])}封"
                       f" | replied={c['replied']}")
             if not res["contacts"]:
                 print("  (空 —— 若该账户确有 outreach,多半是【发送未触发/超时】。把 raw 前 600 字贴回来:)")
+                print("  raw:", (res.get("raw") or "")[:600])
+            return 0
+
+        if args[0] == "deal":
+            acct = args[1] if len(args) > 1 else "Insta Elektro"
+            site = args[2] if len(args) > 2 else None
+            print(f"[probe] Breeze deal 计数:{acct}{f' (domain={site})' if site else ''} …")
+            res = breeze_outreach.ask_deal_summary(browser, acct, website=site, logger=logger)
+            p = res["parsed"]
+            if res.get("error"):
+                print("  ⚠ error:", res["error"], "(安全网触发)。raw:", (res.get("raw") or "")[:600])
+                return 0
+            print(f"found: {p.get('found')} | won={p.get('won')} lost={p.get('lost')} "
+                  f"open={p.get('open')} | attempts={res.get('attempts')}")
+            tier = "?"
+            try:
+                from prospecting import account_grading as _ag
+                tier = _ag.core_tier(p.get("won"), open_deals=p.get("open"))
+            except Exception:
+                pass
+            print(f"→ core_tier(won={p.get('won')}, open={p.get('open')}) = {tier}")
+            if not p.get("found"):
+                print("  (found:false —— 若该账户确有 deal,把 raw 前 600 字贴回来:)")
                 print("  raw:", (res.get("raw") or "")[:600])
             return 0
 

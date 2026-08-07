@@ -1,6 +1,6 @@
-"""回复路由器单测(8 类回复 → 提议)。纯逻辑。
+"""回复路由器单测(6 类回复 → v2 提议)。纯逻辑。
 
-    .venv/bin/python tests/test_reply_router.py
+    python -m tests.test_reply_router
 """
 import sys
 from pathlib import Path
@@ -23,50 +23,51 @@ def r(cat, **kw):
     return rr.route(cat, account_name="Acme", **kw)
 
 
-# 相关 list:不 Note,交给你建 deal
+# 六类,每类一个独立动作
+check("恰好 6 类", len(rr.CATEGORIES) == 6)
+
+# 相关 list:不 Note,建 deal + list 质量 good + 你的动作
 p = r(rr.LIST_RELEVANT)
 check("相关list 不 Note", p["make_note"] is False)
+check("相关list build_deal", p["build_deal"] is True)
+check("相关list list_quality=good", p["list_quality"] == "good")
 check("相关list 是你的动作", p["your_action"] is not None)
 
-# 不相关 list:短 Note + 标相关性否
+# 不相关 list:Note + list 质量 junk(喂 not-core)
 p = r(rr.LIST_IRRELEVANT)
-check("不相关list Note", p["make_note"] and p["relevance_no"])
+check("不相关list Note", p["make_note"] is True)
+check("不相关list list_quality=junk", p["list_quality"] == "junk")
 
-# 暂无货(无时间→默认 90;带时间→用时间)+ warm + 唤醒 Task
-p = r(rr.INTERESTED_NO_STOCK)
-check("暂无货 默认唤醒 90 天", p["task"]["wake_days"] == rr.DEFAULT_WAKE_DAYS)
-check("暂无货 priority=warm", p["priority"] == "warm")
-p2 = r(rr.INTERESTED_NO_STOCK, stock_wake_days=120)
-check("暂无货 带时间用时间(120)", p2["task"]["wake_days"] == 120)
+# interested_later(合并原三类):Note + 带唤醒日 Task;无时机→默认 90,带时机→用时机
+p = r(rr.INTERESTED_LATER)
+check("interested_later 默认唤醒 90", p["task"]["wake_days"] == rr.DEFAULT_WAKE_DAYS)
+check("interested_later Note", p["make_note"] is True)
+p2 = r(rr.INTERESTED_LATER, stock_wake_days=21)
+check("interested_later 带时机用时机(21,如 NDA 短跟进)", p2["task"]["wake_days"] == 21)
+p3 = r(rr.INTERESTED_LATER, stock_wake_days=180)
+check("interested_later 长时机(180,如已有渠道)", p3["task"]["wake_days"] == 180)
 
-# 卡 NDA:短提醒 + warm + 需你推进
-p = r(rr.STUCK_NDA)
-check("卡NDA 短提醒 21 天", p["task"]["wake_days"] == rr.STUCK_REMINDER_DAYS)
-check("卡NDA 需你推进", p["your_action"] is not None)
-
-# 已有渠道:记对手 + 长唤醒 + cold
-p = r(rr.HAS_CHANNEL)
-check("已有渠道 长唤醒 180", p["task"]["wake_days"] == rr.HAS_CHANNEL_WAKE_DAYS)
-check("已有渠道 priority=cold", p["priority"] == "cold")
-
-# 明确不做:Opt-Out + cold + 释放动作
+# 明确不做:Opt-Out + 释放动作(不再写 priority)
 p = r(rr.EXPLICIT_NO)
 check("明确不做 设 Opt-Out", p["sequence_opt_out"] is True)
-check("明确不做 priority=cold", p["priority"] == "cold")
 check("明确不做 提示释放", p["your_action"] is not None)
+check("明确不做 无 priority 字段", "priority" not in p)
 
-# 转介:Note + 对外触达是你的动作(无自动 Task)
+# 转介:Note + switch_contact + 对外触达你来(无自动 Task)
 p = r(rr.REFERRAL)
-check("转介 Note", p["make_note"])
+check("转介 Note", p["make_note"] is True)
+check("转介 switch_contact", p["switch_contact"] is True)
 check("转介 对外触达你来", p["your_action"] is not None and p["task"] is None)
 
-# 客套:无动作(不建 Task),不进清单
+# 客套:无动作
 p = r(rr.PLEASANTRY)
 check("客套 无 task", p["task"] is None)
 check("客套 不可执行(不进清单)", rr.is_actionable(p) is False)
-# 有动作的类别 is_actionable=True
-check("暂无货 可执行", rr.is_actionable(r(rr.INTERESTED_NO_STOCK)) is True)
-check("list_relevant 可执行(有你手动动作)", rr.is_actionable(r(rr.LIST_RELEVANT)) is True)
+
+# is_actionable
+check("interested_later 可执行", rr.is_actionable(r(rr.INTERESTED_LATER)) is True)
+check("list_relevant 可执行", rr.is_actionable(r(rr.LIST_RELEVANT)) is True)
+check("list_irrelevant 可执行(有 list_quality)", rr.is_actionable(r(rr.LIST_IRRELEVANT)) is True)
 
 # 未知类别报错
 try:
