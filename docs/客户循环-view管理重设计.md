@@ -166,4 +166,5 @@ HubSpot 公司层面**下线 priority(hot/warm/cold)字段**。Ned 仍需这套�
 - ✅ **回复分类 taxonomy(已定+已改绿)**:8 类按"类别=动作"归并成业务 **6 类**(见 §14),`reply_router` 重写(去 priority,三合一 `interested_later`,动作重定向 v2 字段)、`reply_classify` 类别指引改 6 类、三个相关单测改绿。不加 unclear。
   - 遗留:下游 `reply_path`/`cold_start`/`nightly` 仍有写 priority 的分支,现对新提议**优雅退化为 no-op**(priority 本就要下线);priority 全面退休 = 单独清理批(附一已列)。
 - **编排层防误标**:`view_manager.compute_segments` 现把空 contacts 一律存 not_started;要改成遇 `ask_breeze` 的 `error`(needs_disambiguation 等)【跳过、不持久化】—— 改 `_ask` 边界,连实盘一起验。
-- **Bitable 客户端 + 编排**:需先在你真机用真凭据【探测 lark-oapi bitable API 的实际返回形状】再写(盲写会牺牲准确性);随后接编排(读→算→写 Bitable + 名单法写 HubSpot 视图 + 建 Task + 夜报)。
+- ✅ **v2 主编排已重写(2026-08-07,待真机 cycle 验)**:`view_manager.run_view_cycle` 串起全部零件——读全书(`read_all`)→ 剔缺名 → prospecting(`ask_breeze` 带 domain → 状态机 → reply_pending 跑 `reply_classify` 定 `reply_is_real` → 重算;Breeze error 跳过)+ core(`ask_deal_summary` → `core_tier` → 按 tier 维护到点)+ `derive_decay_stage` + 回复提议进待确认 → 名单法累积写 view。limit 限每类数量(分批)。编译/import/纯测试绿;整链路待真机 `cycle` 验。
+- **仍待**:Bitable 客户端(先探 lark-oapi bitable 返回形状再写)+ 把 Bitable 接进编排;建 Task(reply_path 已有雏形);account_reader 新 domain 列真机实读;priority 全面退休清理。

@@ -12,6 +12,7 @@ from typing import Callable, Optional
 from prospecting import outreach_store
 from prospecting import outreach_state
 from prospecting import account_grading as grading
+from prospecting import reply_router
 from prospecting.outreach_state import account_outreach_state
 
 
@@ -123,17 +124,23 @@ def run(browser, accounts: list, view_url_map: dict,
 def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = None,
                    apply: bool = False, limit: Optional[int] = None, resume: bool = True,
                    today=None, logger=None) -> dict:
-    """夜跑主编排:读全书 → 分 prospecting/core → Breeze 抽 outreach 算冷开发段 +
-    core 维护段 → 各段名单写进对应 view。view_url_map: {段名: view_url}(段名见 outreach_state.VIEW_NAME
-    + "维护到点")。apply=False 全程 dry-run(不改 view)。limit 限 prospecting 数量(冷启动分批)。
+    """夜跑主编排(v2)。读全书 → 剔缺名 → 分 prospecting/core:
+      - Prospecting:Breeze 抽 outreach(带 domain 消歧)→ 状态机(轮次+双时钟);检测到 inbound
+        (reply_pending)→ reply_classify 定局(真回复→已回复+出提议;OOO/none→回落轮次);
+        Breeze error(重名/缺名)跳过、不误标 not_started。
+      - Core:Breeze 数 deal(ask_deal_summary,HubSpot 无赢单列)→ core_tier(won→T0/T1)→ 按 tier 判维护到点。
+      - Decay 死线:HubSpot 无 Decay Stage 列 → derive_decay_stage(Last Activity)推导。
+    各段名单从 store 累积写进对应 HubSpot view(名单法)。回复提议进 customer_loop_store 待确认(不自动写)。
+    apply=False 全程 dry-run;limit 限【每类】账户数(分批,冷启动用)。view_url_map: {段名: view_url}
+    (段名见 outreach_state.VIEW_NAME + "维护到点")。
 
-    grade_view_url:全字段的分级源 view(有 type/deal/日期全套列 + 全部账户);默认从
-      connectors.customer_loop_tools._view_url() 取(68742792)。段 view 只有名字列,不能拿来读。
+    grade_view_url:全字段源 view(含 Account type/deals/日期/**Company domain name** 列 + 全部账户);
+      默认取 connectors.customer_loop_tools._view_url()。段 view 只有名字列,不能拿来读。
 
-    ⚠ 依赖 Breeze/名单法(已实盘校准)。回信账户已进"已回复·待跟进"段;建 Task 提醒留后续
-      (需回复分类给出跟进日期,见 reply_path)。
+    ⚠ 依赖 Breeze/名单法/LLM(均已实盘校准)。Bitable 驾驶舱 + 建 Task 留后续批次。
     """
-    from prospecting import account_reader as reader, breeze_outreach, view_writer
+    from prospecting import account_reader as reader, breeze_outreach, view_writer, reply_classify
+    from prospecting import customer_loop_store as cls
 
     if grade_view_url is None:
         try:
@@ -145,38 +152,78 @@ def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = 
         browser.page.goto(grade_view_url, wait_until="domcontentloaded")
         browser.page.wait_for_timeout(2500)
 
-    report = reader.grade_all(browser)
-    if not report.get("complete", True):
-        return {"skipped": "读取不完整,跳过本次(重跑)",
-                "read": f"{report.get('total')}/{report.get('expected_total')}"}
+    res = reader.read_all(browser)
+    records = res.get("rows", [])
+    expected = res.get("expected_total")
+    if expected is not None and len(records) < expected:
+        return {"skipped": "读取不完整,跳过本次(重跑)", "read": f"{len(records)}/{expected}"}
 
-    prospecting, core = split_accounts(report.get("records", []))
+    by_name = {(r.get("account_name") or ""): r for r in records}
+    nameless = nameless_accounts(records)                       # 导入缺名:剔除 + 单独上报
+    prospecting, core = split_accounts(records)
 
-    # 断点续跑:跳过 store 里已算过的 prospecting(崩了/分批重跑时接着来,不重复问 Breeze)。
-    todo = prospecting
-    if resume:
-        done = set(outreach_store.all_states().keys())
-        todo = [a for a in prospecting if outreach_store._norm(a) not in done]
+    # 断点续跑:跳过 store 里已算过的(崩了/分批重跑接着来,不重复问 Breeze)。limit 限每类数量(分批)。
+    done = set(outreach_store.all_states().keys()) if resume else set()
+    pros_todo = [a for a in prospecting if outreach_store._norm(a) not in done]
+    core_todo = [c for c in core if outreach_store._norm(c["name"]) not in done]
     if limit:
-        todo = todo[:limit]
+        pros_todo, core_todo = pros_todo[:limit], core_todo[:limit]
 
-    def _ask(acct):
-        return breeze_outreach.ask_breeze(browser, acct, logger=logger).get("contacts", [])
+    errors, proposals = [], []
 
-    compute_segments(todo, _ask, persist=True, today=today)   # 逐账户算+即时存 store(返回值不用)
+    # ── Prospecting:Breeze 抽 outreach(带 domain 消歧)→ 状态机 → 回复交 reply_classify 定局 ──
+    for acct in pros_todo:
+        rec = by_name.get(acct, {})
+        site = rec.get("company_domain")
+        r = breeze_outreach.ask_breeze(browser, acct, website=site, logger=logger)
+        if r.get("error"):
+            errors.append({"account": acct, "error": r["error"]})   # ⚠ 别持久化成 not_started
+            continue
+        contacts = r.get("contacts", [])
+        decay = outreach_state.derive_decay_stage(rec.get("last_activity_date"), today=today)
+        st = account_outreach_state(contacts, decay_stage=decay, today=today)
+        if st.get("state") == "reply_pending":                  # 检测到 inbound → reply_classify 判真假
+            verdict = reply_classify.classify(browser.page, acct, logger=logger, website=site)
+            st = account_outreach_state(contacts, decay_stage=decay,
+                                        reply_is_real=verdict is not None, today=today)
+            if verdict:                                         # 真回复 → 出路由提议(待确认,不自动写)
+                prop = reply_router.route(verdict.get("category"),
+                                          stock_wake_days=verdict.get("stock_wake_days"), account_name=acct)
+                proposals.append({"account": acct, "proposal": prop,
+                                  "reply_date": verdict.get("reply_date"), "summary": verdict.get("summary")})
+        outreach_store.upsert_account_state(acct, st)
 
-    # core 维护到点也入 store(供累积写 view;core 不用 Breeze)
-    due = core_maintenance_segment(core, today=today)
-    for name in due:
-        outreach_store.upsert_account_state(name, {"state": "core_maintain", "view": MAINTAIN_VIEW})
+    # ── Core:Breeze 数 deal(HubSpot 无赢单列)→ core_tier(won→T0/T1)→ 按 tier 判维护到点 ──
+    core_due = []
+    for c in core_todo:
+        name = c["name"]
+        rec = by_name.get(name, {})
+        ds = breeze_outreach.ask_deal_summary(browser, name, website=rec.get("company_domain"), logger=logger)
+        won = (ds.get("parsed") or {}).get("won", 0)
+        openn = rec.get("num_open_deals") or (ds.get("parsed") or {}).get("open", 0)
+        tier = grading.core_tier(won, open_deals=openn)         # list_quality 暂缺(Bitable note 未接)
+        due = outreach_state.core_maintenance_due(
+            c.get("last_activity"), tier=tier if tier in ("T0", "T1", "T2") else None, today=today)
+        outreach_store.upsert_account_state(name, {
+            "state": "core", "tier": tier, "won": won, "maintain_due": due,
+            "view": MAINTAIN_VIEW if due else None})            # 只有到点的进"维护到点"view
+        if due:
+            core_due.append(name)
 
+    if proposals:
+        cls.save_proposals(proposals)                          # 回复提议进待确认库(不自动写)
+
+    # ── 从 store 【累积】汇总各段,写进对应 HubSpot view(名单法)──
     def _write(url, names, ap):
         return view_writer.set_view_membership(browser, url, names, apply=ap, logger=logger)
-
-    # 从 store 【累积】汇总各段(含历史已处理),写进 view —— 分批/重跑也能拿到完整名单。
     cumulative = outreach_store.accounts_by_view()
     applied = apply_segments(cumulative, lambda v: view_url_map.get(v), _write, apply=apply)
-    return {"prospecting_total": len(prospecting), "processed_this_run": len(todo),
-            "core_total": len(core), "core_due": len(due),
-            "cumulative_segments": {k: len(v) for k, v in cumulative.items()},
-            "applied": applied, "applied_mode": "APPLY" if apply else "dry-run"}
+
+    return {
+        "prospecting_total": len(prospecting), "core_total": len(core),
+        "processed_prospecting": len(pros_todo), "processed_core": len(core_todo),
+        "reply_proposals": len(proposals), "core_due": len(core_due),
+        "nameless_count": len(nameless), "breeze_errors": errors,
+        "cumulative_segments": {k: len(v) for k, v in cumulative.items()},
+        "applied": applied, "applied_mode": "APPLY" if apply else "dry-run",
+    }

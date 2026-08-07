@@ -169,7 +169,12 @@ def parse_classification(text: str, today: Optional[date] = None) -> Optional[di
 
 # ── 贾维斯 LLM 调用(集成;失败一律 None → 无提议,fail-safe)────────
 async def _llm_classify_text(reply_text: str, account_name: str = "") -> str:
-    """调贾维斯自己的 LLM 判类别,返回原始 KEY:value 文本(失败返回空串)。"""
+    """调贾维斯自己的 LLM 判类别,返回原始 KEY:value 文本(失败返回空串)。
+
+    ⚠ 必须在协程内 await client.close() —— get_client 每次新建 AsyncOpenAI,不关的话 httpx 连接池
+       会在 asyncio.run 关闭事件循环【之后】才被 GC 清理 → 'Event loop is closed' 噪音(实盘教训)。
+    """
+    client = None
     try:
         import config
         from core.llm import get_client
@@ -185,6 +190,12 @@ async def _llm_classify_text(reply_text: str, account_name: str = "") -> str:
         return (resp.choices[0].message.content or "")
     except Exception:
         return ""
+    finally:
+        if client is not None:
+            try:
+                await client.close()             # 在循环内关连接池,避免 loop 关闭后 GC 报错
+            except Exception:
+                pass
 
 
 def classify_reply_text(reply_text: str, account_name: str = "", today: Optional[date] = None) -> Optional[dict]:
