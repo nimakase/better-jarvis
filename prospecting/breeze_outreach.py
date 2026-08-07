@@ -307,18 +307,28 @@ def _submit(page, frame, inp, text_to_type: str) -> None:
         page.keyboard.press("Enter")
 
 
+def _has_outreach_answer(text: str) -> bool:
+    """文本里是否已出现 outreach 答案 JSON —— 【含 found:false 的空答案也算】(genuine 无数据 = 已完成)。
+    这样"真没 outreach"靠答案 JSON 认,不靠飘忽的完成标记;Breeze 慢/抖时超时不会被误当成"无数据"。"""
+    for obj in _iter_json_objects(_normalize_quotes(text or "")):
+        if isinstance(obj, dict) and "outreach_emails" in obj and not _is_echo(obj):
+            return True
+    return False
+
+
 def _outreach_ready(text: str) -> bool:
-    return bool(parse_response(text).get("outreach_emails"))
+    return _has_outreach_answer(text)
 
 
 def _send_and_poll(page, frame, inp, prompt: str, timeout_ms: int,
                    account_name: Optional[str] = None, data_ready=None) -> tuple:
-    """填 prompt、发送、轮询直到 Breeze 完成/拿到真数据。返回 (原始文本, status)。
+    """填 prompt、发送、轮询直到拿到答案 JSON / 完成 / 超时。返回 (原始文本, status)。
 
-    data_ready(text)->bool:判"已拿到目标 JSON"的谓词(不同问题 JSON 形状不同);默认=有 outreach_emails。
-    status: "ok" | "disambiguation"(重名反问、自动澄清一次仍在问)。
-    安全网:识别到复核问句(looks_like_disambiguation)→ 自动回一句"用精确名、别再问"【仅一次】;
-    再问则带 status=disambiguation 退出(交由调用方记明确错误,绝不静默返空被误判 not_started)。
+    status:
+      "ok"            —— 拿到目标答案 JSON(含 found:false 的空答案)或明确完成标记;
+      "disambiguation" —— 重名反问、自动澄清一次仍在问;
+      "incomplete"    —— 超时还没答案、也没完成标记(多半 Breeze 慢/抖)→ 交上层【重试】,
+                         【绝不】当成"真没数据"(那会误标 not_started / 无 deal)。
     """
     data_ready = data_ready or _outreach_ready
     _submit(page, frame, inp, prompt)
@@ -332,8 +342,10 @@ def _send_and_poll(page, frame, inp, prompt: str, timeout_ms: int,
         except Exception:
             text = ""
         stable_n = stable_n + 1 if text == prev else 0
-        if data_ready(text) and stable_n >= 1:
-            return text, "ok"                # 真数据 + 稳定 → 立刻返回
+        if data_ready(text):
+            return text, "ok"                # 拿到答案 JSON(含 found:false)→ 完成
+        if COMPLETION_MARKER in text and stable_n >= 2:
+            return text, "ok"                # 明确完成标记 + 稳定
         if account_name and stable_n >= 1 and looks_like_disambiguation(text):
             if not disambig_retried:         # 复核问句 → 自动澄清一次
                 disambig_retried = True
@@ -343,16 +355,55 @@ def _send_and_poll(page, frame, inp, prompt: str, timeout_ms: int,
                 prev, stable_n, waited = "", 0, 0   # 重置,等新答复(给足新一轮超时)
                 continue
             return text, "disambiguation"    # 澄清后还在问 → 认栽,带状态退出
-        if COMPLETION_MARKER in text and stable_n >= 1:
-            return text, "ok"                # Breeze 完成且稳定(可能真没 outreach)
-        if stable_n >= 20 and waited >= 60000:
-            return text, "ok"                # 最后兜底:没出现完成标记也别死等
         prev = text
-    return text, "ok"
+    return text, "incomplete"                # 超时没答案/没完成标记 → 不完整,交上层重试
+
+
+def _open_panel(page):
+    """确保 Copilot 面板开着、输入框可见。返回 (frame, inp);开不出返回 (frame_or_None, None)。"""
+    frame, inp = _visible_input(page)
+    if inp is None:                          # 面板没开(或被搞乱)→ 点启动按钮,等输入可见
+        try:
+            page.locator(COPILOT_LAUNCHER).first.click(timeout=6000)
+        except Exception:
+            pass
+        for _ in range(24):
+            page.wait_for_timeout(500)
+            frame, inp = _visible_input(page)
+            if inp is not None:
+                page.wait_for_timeout(600)
+                break
+    return frame, inp
+
+
+def _drive_breeze(page, prompt: str, data_ready, account_name: str,
+                  timeout_ms: int, retries: int, logger=None) -> tuple:
+    """开面板 → 新对话 → 发问 → 轮询;【不完整则重试】(每次重开面板 + 稍等)。返回 (text, status, attempts)。
+
+    status: "ok" / "disambiguation" / "incomplete"(重试用尽仍不完整)/ "panel"(面板开不出)。
+    """
+    frame, inp = _open_panel(page)
+    if inp is None or frame is None:
+        return "", "panel", 0
+    text, status, attempt = "", "incomplete", 0
+    for attempt in range(retries + 1):
+        frame, inp = _reset_conversation(frame, page)      # 新对话
+        if inp is None:
+            frame, inp = _open_panel(page)                 # 面板可能被搞乱 → 重开
+            if inp is None:
+                break
+        text, status = _send_and_poll(page, frame, inp, prompt, timeout_ms,
+                                      account_name=account_name, data_ready=data_ready)
+        if status in ("ok", "disambiguation"):
+            break                            # 拿到答案 / 消歧认栽 → 收
+        if logger:
+            logger.info("breeze | 第 %d 次不完整(Breeze 慢/抖),重试…", attempt + 1)
+        page.wait_for_timeout(1500)          # incomplete → 稍等再来(重开面板重发)
+    return text, status, attempt + 1
 
 
 def ask_breeze(browser, account_name: str, website: Optional[str] = None,
-               timeout_ms: int = 180000, retries: int = 1, logger=None) -> dict:
+               timeout_ms: int = 300000, retries: int = 2, logger=None) -> dict:
     """驱动 HubSpot Copilot(iframe)问一个账户的 outreach → 解析成结构化。
 
     每账户起【新对话】;用 "Thinking complete" 判完成(不靠稳定超时瞎猜,避免思考停顿被误判成完成);
@@ -363,102 +414,53 @@ def ask_breeze(browser, account_name: str, website: Optional[str] = None,
     if not account_name or str(account_name).strip() in ("", "--"):
         return {"parsed": parse_response(""), "contacts": [], "raw": "", "attempts": 0,
                 "error": "invalid_account_name"}   # 导入缺名 → 别问 Breeze
-    page = browser.page
     prompt = build_prompt(account_name, website=website)
-
-    # ⚠ chatspot iframe 面板关着也在 DOM 里,不能靠 iframe 在不在判断 —— 要看【输入框可见】。
-    frame, inp = _visible_input(page)
-    if inp is None:                         # 面板没开 → 点启动按钮,等输入可见
-        try:
-            page.locator(COPILOT_LAUNCHER).first.click(timeout=6000)
-        except Exception:
-            pass
-        for _ in range(24):
-            page.wait_for_timeout(500)
-            frame, inp = _visible_input(page)
-            if inp is not None:
-                page.wait_for_timeout(600)
-                break
-    if inp is None or frame is None:
+    text, status, attempts = _drive_breeze(browser.page, prompt, _outreach_ready,
+                                           account_name, timeout_ms, retries, logger)
+    if status == "panel":
         return {"parsed": parse_response(""), "contacts": [], "raw": "", "attempts": 0,
                 "error": "copilot 面板未打开/输入框不可见(启动按钮选择器?)"}
-
-    parsed, text, attempt, status = None, "", 0, "ok"
-    for attempt in range(retries + 1):
-        frame, inp = _reset_conversation(frame, page)      # 新对话
-        if inp is None:
-            frame, inp = _visible_input(page)
-            if inp is None:
-                break
-        text, status = _send_and_poll(page, frame, inp, prompt, timeout_ms, account_name=account_name)
-        parsed = parse_response(text)
-        if parsed.get("outreach_emails"):
-            status = "ok"
-            break                            # 拿到数据即可;否则重问一次兜底
-        if status == "disambiguation":
-            break                            # 消歧没解决,重问也白搭 → 带 error 退出,别当 not_started
-    parsed = parsed or parse_response(text)
-    out = {"parsed": parsed, "contacts": emails_to_contacts(parsed), "raw": text, "attempts": attempt + 1}
-    if status == "disambiguation" and not parsed.get("outreach_emails"):
-        out["error"] = "needs_disambiguation"    # ⚠ 编排层遇此【别持久化为 not_started】,拎出让 Ned 看
+    parsed = parse_response(text)
+    out = {"parsed": parsed, "contacts": emails_to_contacts(parsed), "raw": text, "attempts": attempts}
+    # ⚠ status=ok = 已完成(拿到数据 或 完成标记的 genuine 无数据,如 Breeze 用散文说"没找到")→ 无 error,
+    #    当 not_started 是对的。只有【超时不完整】或【消歧没解决】才标错误,交编排跳过下轮再来。
+    if status == "incomplete":
+        out["error"] = "breeze_incomplete"
+    elif status == "disambiguation" and not _has_outreach_answer(text):
+        out["error"] = "needs_disambiguation"
     if logger:
         logger.info("breeze_outreach | %s | found=%s emails=%d replied=%d attempts=%d status=%s",
                     account_name, parsed.get("found"),
                     len(parsed.get("outreach_emails", [])),
-                    len(parsed.get("replied_contacts", [])), attempt + 1, status)
+                    len(parsed.get("replied_contacts", [])), attempts, status)
     return out
 
 
 def ask_deal_summary(browser, account_name: str, website: Optional[str] = None,
-                     timeout_ms: int = 120000, retries: int = 1, logger=None) -> dict:
+                     timeout_ms: int = 300000, retries: int = 2, logger=None) -> dict:
     """驱动 Breeze 数某 Core 账户的 deal(won/lost/open)。HubSpot 无原生"赢单数"列,故走 Breeze。
 
-    won 喂 `account_grading.core_tier`(≥3=T0 / 1~2=T1);复用消歧安全网。
-    返回 {"parsed"(=parse_deal_summary), "raw", "attempts", "error"?}。
+    won 喂 `account_grading.core_tier`(≥3=T0 / 1~2=T1);复用消歧安全网 + 不完整自动重试。
+    返回 {"parsed"(=parse_deal_summary), "raw", "attempts", "error"?}。不完整→error='breeze_incomplete'。
     """
     if not account_name or str(account_name).strip() in ("", "--"):
         return {"parsed": parse_deal_summary(""), "raw": "", "attempts": 0,
                 "error": "invalid_account_name"}   # 导入缺名 → 别问 Breeze
-    page = browser.page
     prompt = build_deal_prompt(account_name, website=website)
-
-    frame, inp = _visible_input(page)
-    if inp is None:
-        try:
-            page.locator(COPILOT_LAUNCHER).first.click(timeout=6000)
-        except Exception:
-            pass
-        for _ in range(24):
-            page.wait_for_timeout(500)
-            frame, inp = _visible_input(page)
-            if inp is not None:
-                page.wait_for_timeout(600)
-                break
-    if inp is None or frame is None:
+    text, status, attempts = _drive_breeze(browser.page, prompt, _has_deal_json,
+                                           account_name, timeout_ms, retries, logger)
+    if status == "panel":
         return {"parsed": parse_deal_summary(""), "raw": "", "attempts": 0,
                 "error": "copilot 面板未打开/输入框不可见"}
-
-    parsed, text, attempt, status = None, "", 0, "ok"
-    for attempt in range(retries + 1):
-        frame, inp = _reset_conversation(frame, page)
-        if inp is None:
-            frame, inp = _visible_input(page)
-            if inp is None:
-                break
-        text, status = _send_and_poll(page, frame, inp, prompt, timeout_ms,
-                                      account_name=account_name, data_ready=_has_deal_json)
-        parsed = parse_deal_summary(text)
-        if _has_deal_json(text):
-            status = "ok"
-            break
-        if status == "disambiguation":
-            break
-    parsed = parsed or parse_deal_summary(text)
-    out = {"parsed": parsed, "raw": text, "attempts": attempt + 1}
-    if status == "disambiguation" and not _has_deal_json(text):
+    parsed = parse_deal_summary(text)
+    out = {"parsed": parsed, "raw": text, "attempts": attempts}
+    # status=ok = 已完成(含 genuine 无 deal)→ 无 error;只有超时/消歧才标错误(见 ask_breeze 同款注释)。
+    if status == "incomplete":
+        out["error"] = "breeze_incomplete"
+    elif status == "disambiguation" and not _has_deal_json(text):
         out["error"] = "needs_disambiguation"
     if logger:
         logger.info("breeze_deal | %s | found=%s won=%d lost=%d open=%d attempts=%d status=%s",
                     account_name, parsed.get("found"), parsed.get("won"),
-                    parsed.get("lost"), parsed.get("open"), attempt + 1, status)
+                    parsed.get("lost"), parsed.get("open"), attempts, status)
     return out

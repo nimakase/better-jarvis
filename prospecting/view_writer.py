@@ -34,6 +34,27 @@ CANCEL_BTN = 'button:has-text("Cancel")'
 SAVE_VIEW_BTN = '[data-test-id="save-view-buttons__save"]'
 
 
+def _open_adv_filters(page) -> None:
+    """打开右侧「Advanced filters」面板。页面慢时先等按钮【可见】(多等),失败则 reload 重试一次。
+    (实盘教训:某些 view 页加载慢,6s 直接点会 TimeoutError → 整个视图写失败。)"""
+    last = None
+    for attempt in range(2):
+        try:
+            btn = page.locator(ADV_FILTERS_BTN).first
+            btn.wait_for(state="visible", timeout=20000)
+            btn.click(timeout=8000)
+            return
+        except Exception as e:
+            last = e
+            if attempt == 0:
+                try:
+                    page.reload(wait_until="domcontentloaded")
+                    page.wait_for_timeout(3000)
+                except Exception:
+                    pass
+    raise last if last else RuntimeError("advanced filters 打不开")
+
+
 def set_view_membership(browser, view_url: str, account_names, apply: bool = False, logger=None) -> dict:
     """把某 view 的成员设成 account_names(更新其 Account-name-contains-exactly 过滤器的值)。
 
@@ -47,7 +68,7 @@ def set_view_membership(browser, view_url: str, account_names, apply: bool = Fal
         page = browser.page
         page.goto(view_url, wait_until="domcontentloaded")
         page.wait_for_timeout(2500)
-        page.locator(ADV_FILTERS_BTN).first.click(timeout=6000)   # 开右侧筛选面板
+        _open_adv_filters(page)                                   # 开右侧筛选面板(等可见+重试,防慢页面超时)
         page.wait_for_timeout(1200)
 
         # 面板里已存的过滤器默认是【折叠摘要态】(无铅笔)→ 点摘要展开成可编辑态,铅笔才出现。

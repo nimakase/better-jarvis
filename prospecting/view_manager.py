@@ -175,7 +175,7 @@ def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = 
             grade_view_url = None
     if grade_view_url:                       # 必须先到全字段源 view 再读(否则缺列报错)
         browser.page.goto(grade_view_url, wait_until="domcontentloaded")
-        browser.page.wait_for_timeout(2500)
+        reader.wait_for_table_ready(browser.page)   # 等表真渲染出来再读(SPA,防读半截/读空)
 
     res = reader.read_all(browser)
     records = res.get("rows", [])
@@ -234,45 +234,60 @@ def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = 
 
     # ── Prospecting:Breeze 抽 outreach(带 domain 消歧)→ 状态机 → 回复交 reply_classify 定局 ──
     for acct in pros_todo:
-        rec = by_name.get(acct, {})
-        site = rec.get("company_domain")
-        r = breeze_outreach.ask_breeze(browser, acct, website=site, logger=logger)
-        if r.get("error"):
-            errors.append({"account": acct, "error": r["error"]})   # ⚠ 别持久化成 not_started
+        try:                                                    # 单户抖动不拖垮整轮
+            rec = by_name.get(acct, {})
+            site = rec.get("company_domain")
+            r = breeze_outreach.ask_breeze(browser, acct, website=site, logger=logger)
+            if r.get("error"):                                  # 不完整/消歧/缺名 → 跳过,别误标 not_started
+                errors.append({"account": acct, "error": r["error"]})
+                continue
+            contacts = r.get("contacts", [])
+            decay = outreach_state.derive_decay_stage(rec.get("last_activity_date"), today=today)
+            st = account_outreach_state(contacts, decay_stage=decay, today=today)
+            if st.get("state") == "reply_pending":              # 检测到 inbound → reply_classify 判真假
+                verdict = reply_classify.classify(browser.page, acct, logger=logger, website=site)
+                st = account_outreach_state(contacts, decay_stage=decay,
+                                            reply_is_real=verdict is not None, today=today)
+                if verdict:                                     # 真回复 → 出路由提议(待确认,不自动写)
+                    prop = reply_router.route(verdict.get("category"),
+                                              stock_wake_days=verdict.get("stock_wake_days"), account_name=acct)
+                    proposals.append({"account": acct, "proposal": prop,
+                                      "reply_date": verdict.get("reply_date"), "summary": verdict.get("summary")})
+            outreach_store.upsert_account_state(acct, st)
+            bitable_rows.append(_bitable_row(acct, st))
+        except Exception as e:
+            errors.append({"account": acct, "error": f"exc:{type(e).__name__}"})
+            if logger:
+                logger.warning("prospecting %s 异常跳过:%s", acct, e)
             continue
-        contacts = r.get("contacts", [])
-        decay = outreach_state.derive_decay_stage(rec.get("last_activity_date"), today=today)
-        st = account_outreach_state(contacts, decay_stage=decay, today=today)
-        if st.get("state") == "reply_pending":                  # 检测到 inbound → reply_classify 判真假
-            verdict = reply_classify.classify(browser.page, acct, logger=logger, website=site)
-            st = account_outreach_state(contacts, decay_stage=decay,
-                                        reply_is_real=verdict is not None, today=today)
-            if verdict:                                         # 真回复 → 出路由提议(待确认,不自动写)
-                prop = reply_router.route(verdict.get("category"),
-                                          stock_wake_days=verdict.get("stock_wake_days"), account_name=acct)
-                proposals.append({"account": acct, "proposal": prop,
-                                  "reply_date": verdict.get("reply_date"), "summary": verdict.get("summary")})
-        outreach_store.upsert_account_state(acct, st)
-        bitable_rows.append(_bitable_row(acct, st))
 
     # ── Core:Breeze 数 deal(HubSpot 无赢单列)→ core_tier(won→T0/T1;list质量取 Ned 手写)→ 判维护 ──
     core_due = []
     for c in core_todo:
         name = c["name"]
-        rec = by_name.get(name, {})
-        ds = breeze_outreach.ask_deal_summary(browser, name, website=rec.get("company_domain"), logger=logger)
-        won = (ds.get("parsed") or {}).get("won", 0)
-        openn = rec.get("num_open_deals") or (ds.get("parsed") or {}).get("open", 0)
-        lq = (disp.get(outreach_store._norm(name)) or {}).get("list质量")   # Ned 手写的 list 质量
-        tier = grading.core_tier(won, open_deals=openn, list_quality=lq)
-        due = outreach_state.core_maintenance_due(
-            c.get("last_activity"), tier=tier if tier in ("T0", "T1", "T2") else None, today=today)
-        st_core = {"state": "core", "tier": tier, "won": won, "maintain_due": due,
-                   "view": MAINTAIN_VIEW if due else None}      # 只有到点的进"维护到点"view
-        outreach_store.upsert_account_state(name, st_core)
-        bitable_rows.append(_bitable_row(name, st_core))
-        if due:
-            core_due.append(name)
+        try:                                                    # 单户抖动不拖垮整轮
+            rec = by_name.get(name, {})
+            ds = breeze_outreach.ask_deal_summary(browser, name, website=rec.get("company_domain"), logger=logger)
+            if ds.get("error"):                                 # 不完整/消歧 → 跳过,别拿残缺数据算错 tier
+                errors.append({"account": name, "error": ds["error"]})
+                continue
+            won = (ds.get("parsed") or {}).get("won", 0)
+            openn = rec.get("num_open_deals") or (ds.get("parsed") or {}).get("open", 0)
+            lq = (disp.get(outreach_store._norm(name)) or {}).get("list质量")   # Ned 手写的 list 质量
+            tier = grading.core_tier(won, open_deals=openn, list_quality=lq)
+            due = outreach_state.core_maintenance_due(
+                c.get("last_activity"), tier=tier if tier in ("T0", "T1", "T2") else None, today=today)
+            st_core = {"state": "core", "tier": tier, "won": won, "maintain_due": due,
+                       "view": MAINTAIN_VIEW if due else None}  # 只有到点的进"维护到点"view
+            outreach_store.upsert_account_state(name, st_core)
+            bitable_rows.append(_bitable_row(name, st_core))
+            if due:
+                core_due.append(name)
+        except Exception as e:
+            errors.append({"account": name, "error": f"exc:{type(e).__name__}"})
+            if logger:
+                logger.warning("core %s 异常跳过:%s", name, e)
+            continue
 
     if proposals:
         cls.save_proposals(proposals)                          # 回复提议进待确认库(不自动写)

@@ -83,6 +83,16 @@ ds = bz.parse_deal_summary('noise {"account":"Insta","found":true,"won":3,"lost"
 check(ds["won"] == 3 and ds["lost"] == 1 and ds["open"] == 0 and ds["found"] is True, "deal 解析 won/lost/open")
 check(bz.parse_deal_summary("no json here")["found"] is False, "无 JSON → found:false")
 check(bz._has_deal_json('x {"won":2} y') is True and bz._has_deal_json("nope") is False, "_has_deal_json")
+
+# _has_outreach_answer:found:false 的空答案也算"已完成"(genuine 无数据),避免慢/抖被当无数据
+check(bz._has_outreach_answer('{"account":"X","found":false,"outreach_emails":[],"replied_contacts":[]}') is True,
+      "found:false 空答案 = 已完成")
+check(bz._has_outreach_answer('{"account":"X","found":true,"outreach_emails":[{"date":"2025-05-01","subject":"S","to_contact":"B","job_title":""}]}') is True,
+      "有邮件的真答案 = 已完成")
+check(bz._has_outreach_answer("Thinking...") is False and bz._has_outreach_answer("") is False, "无 JSON → 未完成(交重试)")
+# 回显模板(YYYY-MM-DD 占位)不算答案
+check(bz._has_outreach_answer('{"account":"X","found":true,"outreach_emails":[{"date":"YYYY-MM-DD","subject":"","to_contact":"","job_title":""}]}') is False,
+      "回显模板不算答案")
 check(ag.core_tier(bz.parse_deal_summary('{"won":3}')["won"]) == "T0", "won=3 → T0")
 check(ag.core_tier(bz.parse_deal_summary('{"won":1}')["won"]) == "T1", "won=1 → T1")
 

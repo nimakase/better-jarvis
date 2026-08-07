@@ -230,7 +230,7 @@ def classify_reply_text(reply_text: str, account_name: str = "", today: Optional
 
 
 # ── 集成层(需登录浏览器 + LLM;本机验)────────────────────
-def classify(page, account_name: str, logger=None, timeout_s: float = 60,
+def classify(page, account_name: str, logger=None, timeout_s: float = 180,
              website: Optional[str] = None) -> Optional[dict]:
     """两步:Breeze 抽回信事实 → 贾维斯 LLM 判类别。返回分类 dict(真回复)或 None(无 inbound / none / OOO)。
 

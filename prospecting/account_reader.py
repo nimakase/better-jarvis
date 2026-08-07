@@ -171,6 +171,34 @@ _COUNT_JS = r"""() => {
   return m ? parseInt(m[1].replace(/,/g,''),10) : null;
 }"""
 
+_TABLE_SEL = "table[data-test-id='framework-data-table']"
+
+
+def wait_for_table_ready(page, timeout_ms: int = 30000) -> bool:
+    """等 HubSpot 账户表【真渲染出来】再开始读——SPA 里 domcontentloaded 后 JS 才渲染表格,
+    早了会读半截/读空(固定 sleep 不可靠)。判据:表格容器可见【且】记录数文案出现或已有数据行。
+    返回是否就绪;超时返回 False(调用方仍可试读,有渲染完整性闸+记录数对账兜底)。"""
+    try:
+        page.locator(_TABLE_SEL).first.wait_for(state="visible", timeout=timeout_ms)
+    except Exception:
+        pass
+    waited = 0
+    while waited < timeout_ms:
+        try:
+            cnt = page.evaluate(_COUNT_JS)
+        except Exception:
+            cnt = None
+        try:
+            rows = page.locator(f"{_TABLE_SEL} tbody tr").count()
+        except Exception:
+            rows = 0
+        if cnt or rows > 0:
+            page.wait_for_timeout(1200)      # 再稳一下,等首屏行渲染完整
+            return True
+        page.wait_for_timeout(500)
+        waited += 500
+    return False
+
 
 def _harvest(browser, cols, acc: dict) -> None:
     """收当前视野里【渲染完整】的新行(关键列无空串);半渲染的跳过,靠 60% 重叠滚动下轮再读。"""
