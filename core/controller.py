@@ -247,8 +247,18 @@ async def _compress_history(client: AsyncOpenAI, messages: list, persist: bool =
     if len(messages) <= config.MAX_HISTORY_TURNS and estimated_tokens < config.CONTEXT_WINDOW_SOFT_LIMIT:
         return messages
 
-    to_compress = messages[:-config.MAX_HISTORY_TURNS]
-    keep = messages[-config.MAX_HISTORY_TURNS:]
+    # 2026-08-08 修复：不能直接按位置切——若切点恰好落在"assistant(tool_calls)
+    # → tool 响应"序列中间，keep 开头会是孤零零的 tool 消息，缺了它对应的
+    # tool_calls 声明。OpenRouter/Claude 此前容忍这种残缺（大概率做了兼容），
+    # DeepSeek 官方 API 会直接 400 拒绝整个请求："Messages with role 'tool'
+    # must be a response to a preceding message with 'tool_calls'"（用户实测
+    # 切换后复现）。往前挪切点，直到不落在 tool 消息上——连带把发起这轮调用的
+    # assistant 消息一并纳入 keep，保证每个 tool 消息前面都有它的 tool_calls。
+    cut = len(messages) - config.MAX_HISTORY_TURNS
+    while cut > 0 and messages[cut].get("role") == "tool":
+        cut -= 1
+    to_compress = messages[:cut]
+    keep = messages[cut:]
 
     text_to_summarize = "\n".join(
         f"{m['role'].upper()}: {m['content'] if isinstance(m['content'], str) else '[工具交互]'}"
