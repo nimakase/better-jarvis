@@ -5,6 +5,7 @@
 """
 import asyncio
 import sys
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -38,31 +39,85 @@ import connectors.calendar_tools  # noqa: E402, F401
 wl = spawn.default_whitelist()
 check("web_search" in wl and "fetch_page" in wl, "只读→子 agent 白名单天生继承")
 
-# ── 2. web_search 降级 + 用量 ────────────────────────────────────────────────
-print("[2] web_search 降级/用量")
+# ── 2. web_search 优先级 + 降级 + 用量 ─────────────────────────────────────────
+# 2026-08-08 重写：原版只摆弄 ANYSEARCH_API_KEY，没管 EXA_API_KEY——但 Exa 是
+# 2026-08-07 起改成的【优先】后端（见 web_search.py 顶部注释），只要 EXA_API_KEY
+# 非空就会先打 Exa，AnySearch 那几个断言根本测不到。且原版直接拿假 key 打真实
+# 网络，靠"沙箱连不出去"这个环境巧合制造失败路径——用户本机网络是通的，Exa
+# 会真的打进去，行为完全不同，暴露了这个巧合。改成 monkeypatch _call_exa/
+# _call_anysearch，不再依赖网络是否可达，也不会真的消耗第三方 API 额度。
+print("[2] web_search 优先级/降级/用量")
 
 
 async def _t_search():
-    # 无 key → 退回联网提示，不报错
-    orig_key = config.ANYSEARCH_API_KEY
-    config.ANYSEARCH_API_KEY = ""
-    out = await ws.web_search("测试")
-    check("结构化搜索不可用" in out and "联网" in out, "无 key → 优雅退回 :online 提示")
+    orig_exa_key = config.EXA_API_KEY
+    orig_any_key = config.ANYSEARCH_API_KEY
+    orig_exa_cap = config.EXA_DAILY_CAP
+    orig_any_cap = config.ANYSEARCH_DAILY_CAP
+    orig_call_exa = ws._call_exa
+    orig_call_any = ws._call_anysearch
 
-    # 有 key 但网络失败 → 也退回（沙箱打不到其域名，正好测失败路径）
-    config.ANYSEARCH_API_KEY = "test-key"
-    ws._USAGE.update({"date": "", "count": 0})
-    out2 = await ws.web_search("深圳 连接器")
-    check("结构化搜索不可用" in out2, "调用失败 → 退回而非崩溃")
-    check(ws._usage_today() == 1, "失败也计一次用量（真发生了请求）")
+    def _reset_usage():
+        ws._EXA_USAGE.update({"date": "", "count": 0})
+        ws._USAGE.update({"date": "", "count": 0})
 
-    # 超额保护 → 直接退回，不再发请求
-    config.ANYSEARCH_DAILY_CAP = 1
-    out3 = await ws.web_search("再来")
-    check("用量上限" in out3, "达自设上限 → 退回，不盲目超额")
+    try:
+        # 两个 key 都空 → 不发任何请求，直接退回联网提示
+        config.EXA_API_KEY = ""
+        config.ANYSEARCH_API_KEY = ""
+        _reset_usage()
+        out = await ws.web_search("测试")
+        check("结构化搜索不可用" in out and "联网" in out, "两个 key 都空 → 优雅退回联网提示")
 
-    config.ANYSEARCH_API_KEY = orig_key
-    config.ANYSEARCH_DAILY_CAP = 900
+        # 只配 Exa，调用失败（模拟鉴权错误）→ 退回，且只计 Exa 用量、不碰 AnySearch 计数
+        config.EXA_API_KEY = "fake-exa-key"
+        config.ANYSEARCH_API_KEY = ""
+        _reset_usage()
+
+        async def _fake_exa_fail(query, max_results):
+            return False, "模拟鉴权失败"
+        ws._call_exa = _fake_exa_fail
+        out2 = await ws.web_search("深圳 连接器")
+        check("结构化搜索不可用" in out2, "只配 Exa 且调用失败 → 退回而非崩溃")
+        check(ws._exa_usage_today() == 1, "Exa 调用失败也计一次用量（真发生了请求）")
+        check(ws._usage_today() == 0, "没配 AnySearch key 时 AnySearch 用量不应被计")
+
+        # Exa 调用成功 → 直接用 Exa 结果，不再兜底到 AnySearch
+        async def _fake_exa_ok(query, max_results):
+            return True, [{"title": "T", "url": "u", "snippet": "s", "content": "c"}]
+        ws._call_exa = _fake_exa_ok
+        _reset_usage()
+        out3 = await ws.web_search("测试")
+        check("Exa" in out3 and "结构化搜索不可用" not in out3, "Exa 调用成功 → 直接返回 Exa 结果")
+
+        # Exa 已达自设每日上限 → 跳过 Exa 不再发请求，退回信号里体现原因
+        config.EXA_DAILY_CAP = 1
+        ws._EXA_USAGE.update({"date": date.today().isoformat(), "count": 1})
+        out4 = await ws.web_search("测试")
+        check("上限" in out4, "Exa 达自设上限 → 不再调用，退回信号里体现原因")
+        config.EXA_DAILY_CAP = orig_exa_cap
+
+        # Exa 失败、AnySearch 兜底成功 → 用 AnySearch 的结果
+        config.EXA_API_KEY = "fake-exa-key"
+        config.ANYSEARCH_API_KEY = "fake-any-key"
+        _reset_usage()
+        ws._call_exa = _fake_exa_fail
+
+        async def _fake_any_ok(query, max_results):
+            return True, [{"title": "T2", "url": "u2", "snippet": "s2", "content": "c2"}]
+        ws._call_anysearch = _fake_any_ok
+        out5 = await ws.web_search("测试")
+        check("AnySearch" in out5, "Exa 失败后正确兜底到 AnySearch")
+        check(ws._exa_usage_today() == 1 and ws._usage_today() == 1,
+              "两个后端的用量各自独立计数")
+    finally:
+        ws._call_exa = orig_call_exa
+        ws._call_anysearch = orig_call_any
+        config.EXA_API_KEY = orig_exa_key
+        config.ANYSEARCH_API_KEY = orig_any_key
+        config.EXA_DAILY_CAP = orig_exa_cap
+        config.ANYSEARCH_DAILY_CAP = orig_any_cap
+        _reset_usage()
 
 asyncio.run(_t_search())
 
