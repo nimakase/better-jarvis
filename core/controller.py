@@ -318,22 +318,29 @@ def _normalize_result(raw) -> ToolResult:
     return raw if isinstance(raw, ToolResult) else ToolResult(text=str(raw))
 
 
-async def _forced_text_summary(client, system: str, messages: list) -> str:
-    """最终必答保证：工具跑完但模型交了白卷（最终文本为空）时，强制补一次
-    纯文本总结——这次调用不带 tools，模型只能说话。失败返回空串（不拖垮回合）。
+async def _forced_text_summary(client, system: str, messages: list, used_tools: bool = True) -> str:
+    """最终必答保证：模型交了白卷（最终文本为空）时，强制补一次纯文本总结——
+    这次调用不带 tools，模型只能说话。失败返回空串（调用方须自己兜底提示用户，
+    不能假设空串等于"没问题"）。
 
     背景（2026-07-22 实测）：多轮工具消息后部分模型会以空 content 收尾，
     传输层只能显示「处理完成，无文本输出」。这不该发生——结果都在工具消息里，
-    差的只是让模型把它讲出来。"""
+    差的只是让模型把它讲出来。
+    2026-08-08 补充：DeepSeek V4 还有一类不需要先跑工具就会出现的空补全
+    （content/reasoning_content 都是空，见官方 GitHub issue track），所以
+    used_tools 现在是可选的——没用过工具时用不提"工具结果"的措辞。"""
+    nudge = ("（系统提示：你刚执行了工具但没输出任何文字。"
+             "请基于上面的工具结果，用中文把结论/现状直接总结给用户；"
+             "若工具报了错，说明是什么错、你判断的原因和建议。）") if used_tools else (
+             "（系统提示：你刚才没有输出任何文字回复。请直接用中文回答用户最新"
+             "这条消息，不要留空；如果问题不清楚，就直接问清楚需要什么。）")
     try:
         resp = await client.chat.completions.create(
             model=config.CLAUDE_MODEL,
             max_tokens=config.MAX_TOKENS_RESPONSE,
             messages=[{"role": "system", "content": system}] + messages + [{
                 "role": "user",
-                "content": "（系统提示：你刚执行了工具但没输出任何文字。"
-                           "请基于上面的工具结果，用中文把结论/现状直接总结给用户；"
-                           "若工具报了错，说明是什么错、你判断的原因和建议。）",
+                "content": nudge,
             }],
         )
         return (resp.choices[0].message.content or "").strip()
@@ -553,6 +560,12 @@ class JarvisController:
             full_text = ""
             # 收集工具调用（流式下需要拼接 delta）
             tool_call_accum: dict[int, dict] = {}  # index → {id, name, arguments}
+            # DeepSeek V4 思考模式的 reasoning_content（隐藏推理过程，不进正文流）：
+            # 官方要求带 tool_calls 的 assistant 消息回灌历史时必须带上同一轮的
+            # reasoning_content，否则第二轮起会 400。用 getattr 防御式读取——
+            # 这是 DeepSeek 专属扩展字段，OpenAI 官方 SDK 的类型定义不一定有它，
+            # 其它 provider 上 delta 上取不到就是 None，零行为影响。
+            full_reasoning = ""
 
             stream = await self.client.chat.completions.create(
                 model=self.model,
@@ -577,6 +590,12 @@ class JarvisController:
                     full_text += delta.content
                     yield {"type": "text", "text": delta.content}
 
+                # 隐藏推理内容（DeepSeek 思考模式扩展字段）：只攒，不进正文流，
+                # 不展示给用户——它是"怎么想的"，不是"最终答案"。
+                reasoning_piece = getattr(delta, "reasoning_content", None)
+                if reasoning_piece:
+                    full_reasoning += reasoning_piece
+
                 # 工具调用 delta（OpenAI 流式下分片到达）
                 if delta.tool_calls:
                     for tc_delta in delta.tool_calls:
@@ -593,12 +612,28 @@ class JarvisController:
 
             # 没有工具调用，正常结束
             if finish_reason != "tool_calls" or not tool_call_accum:
-                # 最终必答保证：跑过工具却交白卷 → 强制补一次纯文本总结
-                if not full_text.strip() and tool_rounds > 0:
-                    fallback = await _forced_text_summary(self.client, system, self.messages)
+                # 最终必答保证：交白卷 → 强制补一次纯文本总结。
+                # 2026-08-08 修复：原来只在"跑过工具却交白卷"（tool_rounds>0）时
+                # 才触发——但 DeepSeek V4 有已知问题（GitHub 上有多起同类报告），
+                # 哪怕第一轮没调用任何工具也可能直接返回空补全（content/
+                # reasoning_content 都是空，completion_tokens=0）。用户实测正是
+                # 这种"发一句话，指示灯黄一下就绿了，什么都没有"——不该要求先
+                # 用过工具才有安全网，改成只要交白卷就补一次。
+                if not full_text.strip():
+                    fallback = await _forced_text_summary(
+                        self.client, system, self.messages, used_tools=tool_rounds > 0)
                     if fallback:
                         full_text = fallback
                         yield {"type": "text", "text": fallback}
+                    else:
+                        # 补答本身也失败/仍是空——不能让这一轮彻底静音。哪怕问题
+                        # 没解决，至少让用户看见"这轮真的什么都没发生"，而不是
+                        # 误以为消息发丢了或程序卡住。
+                        notice = ("（这一轮没能生成任何文字回复，可能是模型这次返回"
+                                  "异常。可以换个问法，或直接回复「继续」再试一次；"
+                                  "如果反复出现，把这条提示发给我核实。）")
+                        full_text = notice
+                        yield {"type": "text", "text": notice}
                 self.messages.append({"role": "assistant", "content": full_text})
                 break
 
@@ -626,11 +661,18 @@ class JarvisController:
                 }
                 for tc in tool_call_accum.values()
             ]
-            self.messages.append({
+            assistant_msg = {
                 "role": "assistant",
                 "content": full_text or None,
                 "tool_calls": tool_calls_for_msg,
-            })
+            }
+            # DeepSeek 思考模式要求：带 tool_calls 的 assistant 消息回灌历史时
+            # 必须原样带上同一轮的 reasoning_content，否则从下一轮起该请求会
+            # 被拒（400）。其它 provider 上 full_reasoning 恒为空，不加这个键，
+            # 零行为影响。
+            if full_reasoning:
+                assistant_msg["reasoning_content"] = full_reasoning
+            self.messages.append(assistant_msg)
 
             # 执行每个工具，把结果追加为 tool 消息
             _msgs_before = len(self.messages)   # 快照，循环末用于取本轮工具结果做卡循环判定
