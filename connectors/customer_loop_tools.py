@@ -1,19 +1,29 @@
 """connectors/customer_loop_tools.py — 客户循环夜间工作流注册(OPEN,自动加载)。
 
-把 `prospecting/nightly.run` 注册成一个【detach 工作流】,由 core/registry 自动 import 而登记
-(无需改 main.py、不碰 PROTECTED)。
+把 `prospecting/view_manager.run_view_cycle`(v2)注册成一个【detach 工作流】,由 core/registry
+自动 import 而登记(无需改 main.py、不碰 PROTECTED)。
+
+2026-08-09:从 v1(`prospecting.nightly.run`,直接写 HubSpot priority/type 属性)切到 v2
+(`view_manager.run_view_cycle`,名单法写私有 view 成员 + Bitable,不再碰 HubSpot 属性)——
+v1 那套自动写 Account 属性越界了(Ned 的分工是:贾维斯维护 view 名单 + Bitable,
+Account Type 由 Ned 手动设),v2 拉回这条边界。v1 的 nightly.run/cold_start.run/
+account_writer.set_property 从此不再被本工作流调用(= 断电退休,先不删,后话)。
+调度里挂的名字仍是 customer_loop_nightly,不用改调度,改完自动生效。
 
 线程模型照 prospecting/workflows.make_hubspot_runtime:单线程 executor 独占浏览器全生命周期,
 async step 用 run_in_executor 派活——因为 Playwright 的 sync API 不能在事件循环线程里跑。
 
 护栏:
-  - 首跑=冷启动对账应用,会触发多次 write_external(经 account_writer 过 effects/trust 两闸)。
-  - **安全默认 dry-run**:实际写入受环境变量 JARVIS_CUSTOMER_LOOP_APPLY 控制(未设/非 1 = 只出计划不写)。
-    Ned 主干验收满意后再置 1 让首跑真写(= 我们说的"第一次正式夜间循环")。
-  - 视图 URL 从 JARVIS_GRADE_VIEW_URL 取(全字段视图)。
+  - **安全默认 dry-run**:实际写入(view 成员 + Bitable)受环境变量 JARVIS_CUSTOMER_LOOP_APPLY
+    控制(未设/非 1 = 只出计划不写)。
+  - 视图 URL 从 JARVIS_GRADE_VIEW_URL 取(全字段源视图,读全书用;各段私有 view 走
+    prospecting.view_config.VIEW_URL_MAP)。
+  - 冷启动(首次全量,465 账户 ×2.5 分钟 ≈ 十几小时)不走本 detach 夜间工作流——一晚跑不完;
+    冷启动是一次性手动/分批 run_view_cycle(limit=..., apply=...)灌 store,灌满后本工作流
+    才是"稳态增量"(resume=True,只处理 store 里没有的新账户)。
   - 定时未在此建;由 Ned 用 scheduler 明示挂 customer_loop_nightly。
 
-本文件只做注册与线程编排(逻辑在外);分级/对账/写回/冷启动逻辑都在 prospecting/*。
+本文件只做注册与线程编排(逻辑在外);状态判定/view 归段/写回逻辑都在 prospecting/*。
 """
 from __future__ import annotations
 
@@ -50,13 +60,14 @@ def _view_url() -> str:
 
 
 def make_customer_loop_runtime(view_url: str, apply: bool):
-    """返回 (run_async, close):浏览器全生命周期锁在单线程 executor 里跑 nightly.run。"""
+    """返回 (run_async, close):浏览器全生命周期锁在单线程 executor 里跑 run_view_cycle(v2)。"""
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
 
     from prospecting import hubspot_worker as w
     from prospecting import hubspot_session as hs
-    from prospecting import nightly
+    from prospecting import view_manager
+    from prospecting.view_config import VIEW_URL_MAP
 
     try:
         import config
@@ -82,10 +93,11 @@ def make_customer_loop_runtime(view_url: str, apply: bool):
         session.attach(browser)
         browser.run_mode = "background"
         try:
-            return nightly.run(browser, view_url, apply=apply, logger=logger)
+            return view_manager.run_view_cycle(
+                browser, VIEW_URL_MAP, grade_view_url=view_url, apply=apply, logger=logger)
         except Exception as e:
-            logger.warning("customer_loop: nightly.run 失败(%s)", e)
-            return {"error": f"nightly.run 失败:{e}"}
+            logger.warning("customer_loop: run_view_cycle 失败(%s)", e)
+            return {"error": f"run_view_cycle 失败:{e}"}
 
     async def run_step(ctx: dict) -> dict:
         loop = asyncio.get_running_loop()
@@ -135,6 +147,49 @@ def _incremental_insights_note(res: dict) -> str:
     return _insight.render(ins)
 
 
+def _render_cycle_notification(res: dict) -> tuple[str, str]:
+    """把 view_manager.run_view_cycle(v2) 的结果 dict 渲成夜报文案 + 严重度。
+
+    拆成独立函数(同 _incremental_insights_note 的理由):notify() 本身嵌在
+    _build_customer_loop_nightly() 里，构造它会触发真实 Playwright/HubSpot 依赖，
+    拆出来才能脱离浏览器 runtime 单测。返回 (content, severity)。
+    """
+    if res.get("error"):
+        return f"客户循环夜间作业未完成:{res['error']}", "high"
+    if res.get("skipped"):
+        return (f"客户循环:本次跳过——{res['skipped']}"
+                f"(读到 {res.get('read', '?')})。"), "high"
+
+    mode = "已写" if res.get("applied_mode") == "APPLY" else "dry-run(未写)"
+    segs = res.get("cumulative_segments") or {}
+    seg_text = "、".join(f"{k} {v}" for k, v in segs.items()) or "（无）"
+    parts = [
+        f"客户循环·增量 {mode}。本轮处理 prospecting "
+        f"{res.get('processed_prospecting', 0)}/{res.get('prospecting_total', 0)}、"
+        f"core {res.get('processed_core', 0)}/{res.get('core_total', 0)}。",
+        f"累计各段:{seg_text}。",
+    ]
+    if res.get("reply_proposals"):
+        parts.append(f"{res['reply_proposals']} 条回复待你确认路由建议(customer_loop_store)。")
+    if res.get("core_due"):
+        parts.append(f"{res['core_due']} 个 Core 账户到维护提醒点。")
+    errs = res.get("breeze_errors") or []
+    if errs:
+        parts.append(f"{len(errs)} 个账户 Breeze 查询失败,已跳过(下次重试)。")
+    fyi = res.get("core_no_deal_fyi") or []
+    if fyi:
+        parts.append(f"{len(fyi)} 个 Core 账户没有 deal 且你还没批注,确认是否符合预期。")
+    dispo = res.get("dispositions_understood") or []
+    if dispo:
+        parts.append(f"读懂了 {len(dispo)} 条你写的处置备注。")
+    if res.get("nameless_count"):
+        parts.append(f"{res['nameless_count']} 个账户导入缺名,已跳过、需你补名或重导。")
+    bitable = res.get("bitable")
+    if isinstance(bitable, dict) and bitable.get("error"):
+        parts.append(f"⚠ Bitable 写入失败:{bitable['error']}。")
+    return " ".join(parts), "normal"
+
+
 def _build_customer_loop_nightly():
     view_url = _view_url()
     apply = _apply_enabled()
@@ -149,44 +204,13 @@ def _build_customer_loop_nightly():
 
     def notify(ctx: dict) -> dict:
         from core import delivery as _delivery
-        res = ctx.get("nightly") or {}
-        if res.get("error"):
-            content = f"客户循环夜间作业未完成:{res['error']}"
-            sev = "high"
-        else:
-            phase = res.get("phase")
-            if phase == "coldstart":
-                s = res.get("summary", {})
-                pc = s.get("plan_counts", {})
-                md = s.get("manual_demote", []) or []
-                mode = "已写自动集" if res.get("applied") else "dry-run(未写)"
-                rc = s.get("review_count", 0)
-                warn = "" if s.get("complete", True) else (
-                    f"⚠️读取不完整(读到 {s.get('total')}/{s.get('expected_total')}),"
-                    "本次未写、请重跑。")
-                content = (warn + f"客户循环·冷启动 {mode}。计划:{pc};"
-                           f"另有 {rc} 个 Core-无-deal 待你手动复核(带日期的中文清单在 plan 文件:"
-                           f"{s.get('plan_file', '')})。")
-            else:
-                fc = res.get("flagged_count", 0)
-                content = (f"客户循环·增量:更新 priority {res.get('changed', 0)} 个"
-                           + (f";另有 {fc} 个你手动设的与规则不符(仅提示、未改,详见分歧提示)" if fc else "")
-                           + "。")
-                # 任务 #21：通用再分析——不改变上面的主结论，只额外看一眼容易被
-                # 现有文案漏掉的数字。出错也绝不能拖垮夜间通知投递本身。
-                try:
-                    note = _incremental_insights_note(res)
-                    if note:
-                        content += "\n\n" + note
-                except Exception:
-                    pass
-            sev = "normal"
+        content, sev = _render_cycle_notification(ctx.get("cycle") or {})
         r = _delivery.deliver(track="customer_loop", title="🔁 客户循环夜间作业",
                               content=content, severity=sev)
         return {"pushed": r.get("delivered", False)}
 
     return {
-        "steps": [wf.Step("nightly", run_step), wf.Step("notify", notify, on_error="skip")],
+        "steps": [wf.Step("cycle", run_step), wf.Step("notify", notify, on_error="skip")],
         "context": {},
         "cleanup": close,
     }
@@ -194,8 +218,9 @@ def _build_customer_loop_nightly():
 
 wr.register_workflow(
     "customer_loop_nightly", "客户循环·夜间",
-    "首跑应用冷启动对账计划(受 JARVIS_CUSTOMER_LOOP_APPLY 控制,默认 dry-run);"
-    "之后增量(回复路+三层,待建)。产出经飞书交付。",
+    "v2 增量:读全书 → 按轮次/双时钟判定状态 → 名单法写各段私有 view + 驾驶舱 Bitable"
+    "(受 JARVIS_CUSTOMER_LOOP_APPLY 控制,默认 dry-run)。resume=True,只处理 store 里没有的"
+    "新账户;首次全量(冷启动)不走本工作流,由 Ned 手动分批跑。产出经飞书交付。",
     _build_customer_loop_nightly, confirm=False, dispatch="detach",
     needs="需已登录 HubSpot + 设 JARVIS_GRADE_VIEW_URL;真写需另设 JARVIS_CUSTOMER_LOOP_APPLY=1",
 )

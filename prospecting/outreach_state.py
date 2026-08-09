@@ -44,15 +44,26 @@ DECAY_INACTIVITY_DAYS = 137      # 4 个月 2 周:进入衰减
 DECAY_FINAL_WARNING_DAYS = 188   # 末周之前 = in_decay;之后 = final_warning
 DECAY_REASSIGN_DAYS = 195        # 之后视作已回收
 
-VIEW_NAME = {
-    "replied": "已回复·待跟进",
-    "reply_pending": "待分类回复",    # ⚠ provisional:检测到 inbound、待 reply_classify 判真假;
-                                      #    编排应先分类再写 view,正常不应残留到写库(残留则 view 未配→跳过)
-    "not_started": "未开发",
-    "sequencing": "开发中",
-    "round_due": "开发中",           # 与 sequencing 同 view;差别在 next_round_due 标记驱动提醒
-    "exhausted": "待处理·换人或放弃",
-}
+def view_for(state: str, rounds_done: Optional[int] = None) -> str:
+    """状态 → 段名(按轮数拆 view,v3,2026-08-09)。优先级:replied > reply_pending > 按轮数。
+
+    round0(没发过)→ 未开发;=1 → 发1轮;=2 → 发2轮;>=3 → 发3轮(不会真出现"发4轮"——
+    Ned 一个 sequence 固定 MAX_ROUNDS=3 轮,rounds_done 正常不会超过 3;异常兜底也按 3 算)。
+    """
+    if state == "replied":
+        return "已回复"
+    if state == "reply_pending":
+        # ⚠ provisional:检测到 inbound、待 reply_classify 判真假;编排应先分类再写 view,
+        # 正常不应残留到写库(残留则 view 未配→跳过,不会误写进任何段)。
+        return "待分类回复"
+    r = int(rounds_done or 0)
+    if r <= 0:
+        return "未开发"
+    if r == 1:
+        return "发1轮"
+    if r == 2:
+        return "发2轮"
+    return "发3轮"                      # r >= 3 一律按 3(就近兜底,不凭空造"发4轮")
 
 
 def _norm_name(s) -> str:
@@ -153,7 +164,7 @@ def account_outreach_state(contacts: list, all_contacts: Optional[list] = None,
 
     return {
         "state": state,
-        "view": VIEW_NAME[state],
+        "view": view_for(state, rounds_done),
         "rounds_done": rounds_done,
         "next_round_due": next_round_due,
         "has_system_sequence": ra["has_system"],

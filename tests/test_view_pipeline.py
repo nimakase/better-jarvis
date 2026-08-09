@@ -80,12 +80,15 @@ out = view_writer.format_value_list(["A Corp", " A Corp ", "", "B Ltd", "a corp"
 check(out == "A Corp\nB Ltd", f"去重去空保序, got {out!r}")
 
 # ── outreach_store:存/取/按 view 汇总 ─────────────────────────
-outreach_store.upsert_account_state("Acme Inc", {"state": "pending", "view": "待处理·换人或放弃"})
-outreach_store.upsert_account_state("Beta LLC", {"state": "not_started", "view": "未开发"})
-outreach_store.upsert_account_state("Gamma Co", {"state": "pending", "view": "待处理·换人或放弃"})
-check(outreach_store.get_account_state("acme inc")["view"] == "待处理·换人或放弃", "按归一名取回")
+# 2026-08-09:v3 按轮数拆 view 后,accounts_by_view() 不再信任存量 view 字段,
+# 改按 state+rounds_done 现算(outreach_state.view_for)——夹具改用真实 state 值。
+outreach_store.upsert_account_state("Acme Inc", {"state": "exhausted", "rounds_done": 3, "view": "旧值不该被信"})
+outreach_store.upsert_account_state("Beta LLC", {"state": "not_started", "rounds_done": 0, "view": "未开发"})
+outreach_store.upsert_account_state("Gamma Co", {"state": "exhausted", "rounds_done": 3, "view": "旧值不该被信"})
+check(outreach_store.get_account_state("acme inc")["state"] == "exhausted", "按归一名取回")
 by = outreach_store.accounts_by_view()
-check(sorted(by["待处理·换人或放弃"]) == ["Acme Inc", "Gamma Co"], f"按 view 汇总, got {by.get('待处理·换人或放弃')}")
+check(sorted(by["发3轮"]) == ["Acme Inc", "Gamma Co"],
+      f"按 state+rounds_done 现算 view 汇总(不信旧 view 字段), got {by.get('发3轮')}")
 check(by["未开发"] == ["Beta LLC"], "未开发段")
 
 # ── view_manager.compute_segments(假 breeze_ask + roster;简化状态)──
@@ -109,8 +112,8 @@ def fake_roster(acct):
 
 segs = view_manager.compute_segments(["Acct待处理", "Acct开发中", "Acct未开发", "Acct回复"],
                                      fake_ask, roster_of=fake_roster, persist=True, today=TODAY)
-check("Acct待处理" in segs["待处理·换人或放弃"], f"待处理归位, got {segs}")
-check("Acct开发中" in segs["开发中"], "开发中归位")
+check("Acct待处理" in segs["发3轮"], f"三轮跑完归发3轮, got {segs}")
+check("Acct开发中" in segs["发1轮"], "1 轮归发1轮")
 check("Acct未开发" in segs["未开发"], "未开发归位")
 check("Acct回复" in segs["待分类回复"], "有 inbound → 待分类(交 reply_classify 定局)")
 # 持久化 + 未试联系人算对
@@ -123,9 +126,9 @@ def fake_write(url, names, apply):
     written[url] = (sorted(names), apply)
     return {"ok": True, "count": len(names), "applied": apply}
 
-url_map = {"待处理·换人或放弃": "http://view/pending", "未开发": "http://view/new"}  # 没配"已回复"
+url_map = {"发3轮": "http://view/pending", "未开发": "http://view/new"}  # 没配"已回复"
 res = view_manager.apply_segments(segs, lambda v: url_map.get(v), fake_write, apply=True)
-check(res["待处理·换人或放弃"]["ok"] and written["http://view/pending"][1] is True, "待处理写入")
+check(res["发3轮"]["ok"] and written["http://view/pending"][1] is True, "发3轮写入")
 check(res["待分类回复"]["ok"] is False and "未配置" in res["待分类回复"]["reason"], "未配置 view 跳过并说明")
 
 # ── view_manager.split_accounts:按 deal 分 prospecting/core ────

@@ -31,17 +31,17 @@ check(r["state"] == "not_started", "有联系人但没发过=未开发")
 
 # ── sequencing:还在跑、距上封 ≤60 天(在节奏上,别动)──────────
 r = os_.account_outreach_state([_c("A", ["2025-05-25"])], today=TODAY)  # 7 天前,1 轮
-check(r["state"] == "sequencing" and r["view"] == "开发中", f"近期发过=开发中, got {r['state']}")
+check(r["state"] == "sequencing" and r["view"] == "发1轮", f"近期发过=发1轮, got {r['state']}")
 check(r["rounds_done"] == 1 and r["next_round_due"] is False, "1 轮 / 不催发")
 
 # ── round_due:还在跑、距上封 >60 天(该发下一轮)────────────────
 r = os_.account_outreach_state([_c("A", ["2025-03-20"])], today=TODAY)  # 73 天前,1 轮
-check(r["state"] == "round_due" and r["view"] == "开发中", f">60天且轮未满=round_due, got {r['state']}")
+check(r["state"] == "round_due" and r["view"] == "发1轮", f">60天且轮未满=round_due, got {r['state']}")
 check(r["next_round_due"] is True and r["rounds_done"] == 1, "催发标记 + 仍 1 轮")
 
 # ── exhausted:三轮跑完、没回(决策点)─────────────────────────
 r = os_.account_outreach_state([_c("A", THREE_ROUNDS)], today=TODAY)
-check(r["state"] == "exhausted" and r["view"] == "待处理·换人或放弃", f"三轮完=待处理, got {r['state']}")
+check(r["state"] == "exhausted" and r["view"] == "发3轮", f"三轮完=发3轮, got {r['state']}")
 check(r["rounds_done"] == 3 and r["last_outreach"] == "2025-05-03" and r["days_since_last"] == 29,
       f"3 轮 / 末封 / 天数, got {r['rounds_done']},{r['last_outreach']},{r['days_since_last']}")
 
@@ -56,7 +56,7 @@ check(r["state"] == "reply_pending" and r["view"] == "待分类回复" and r["re
       f"inbound 未判 → reply_pending, got {r['state']}")
 # 判成真回复 → replied(压过一切)
 r = os_.account_outreach_state([_c("A", THREE_ROUNDS, replied=True)], reply_is_real=True, today=TODAY)
-check(r["state"] == "replied" and r["view"] == "已回复·待跟进", "判真 → 已回复")
+check(r["state"] == "replied" and r["view"] == "已回复", "判真 → 已回复")
 # 判成非真回复(OOO/none)→ 当没回复,回落轮次(三轮 → exhausted)
 r = os_.account_outreach_state([_c("A", THREE_ROUNDS, replied=True)], reply_is_real=False, today=TODAY)
 check(r["state"] == "exhausted", f"判假(OOO)→ 回落轮次 exhausted, got {r['state']}")

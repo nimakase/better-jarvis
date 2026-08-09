@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 from prospecting.customer_loop_store import store_dir, _now
+from prospecting import outreach_state
 
 
 def _path() -> Path:
@@ -55,10 +56,21 @@ def all_states() -> dict:
 
 
 def accounts_by_view() -> dict:
-    """按 view 汇总账户【原始名】(用于名单法写 HubSpot view)。返回 {view: [account, ...]}。"""
+    """按 view 汇总账户【原始名】(用于名单法写 HubSpot view)。返回 {view: [account, ...]}。
+
+    v3(2026-08-09,按轮数拆 view):非 core 记录不信任 store 里存的旧 view 字段——按轮数拆分后
+    旧值(如"开发中")已失效,存量库无需迁移,现算即可(outreach_state.view_for)。
+    core 记录(state=="core")仍用自身 view 字段(view_manager.MAINTAIN_VIEW,不经 view_for)。
+    """
     out: dict = {}
     for rec in _load().values():
-        view = rec.get("view")
+        if rec.get("state") == "core":
+            view = rec.get("view")
+        else:
+            try:
+                view = outreach_state.view_for(rec.get("state"), rec.get("rounds_done"))
+            except Exception:
+                view = rec.get("view")
         if not view:
             continue
         out.setdefault(view, []).append(rec.get("account"))
