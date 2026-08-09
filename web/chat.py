@@ -7,6 +7,7 @@ WebSocket 对话接口 + 带外动作分发。
 """
 
 import json
+import logging
 import shutil
 from pathlib import Path
 import uuid
@@ -20,6 +21,13 @@ from connectors import vault
 
 router = APIRouter()
 DOWNLOAD_DIR = config.DOWNLOAD_DIR
+
+# 2026-08-08：此前这条通道对话处理异常只会发给前端一条 error 消息，日志里
+# 一个字都不落——同样的异常在飞书通道（lark_bridge.py）早就有 logger.exception
+# 记录，网页这条漏了。用户反馈"贾维斯有时候静默失败，想回头查日志"，先把这个
+# 最基本的缺口补上：出异常必须落进 logs/jarvis.log（明文、带完整 traceback），
+# 不然"回头查"无从查起。
+logger = logging.getLogger("jarvis.web")
 
 # 单一主对话：transcript 落到固定会话，跨标签/设备都能回放同一段历史。
 # 工作记忆(controller.messages)仍按连接隔离；历史层只负责"给人看"的持久记录。
@@ -95,6 +103,9 @@ async def websocket_chat(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     except Exception as e:
+        # 落一条带完整 traceback 的日志（logs/jarvis.log），不然出了问题只能
+        # 靠前端那一行 error 文字猜——那句话往往只有异常的 str()，看不出根因。
+        logger.exception("[web] 对话处理异常（session=%s）", session_id)
         try:
             await websocket.send_text(json.dumps({"type": "error", "text": str(e)}))
         except Exception:

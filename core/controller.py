@@ -620,6 +620,12 @@ class JarvisController:
                 # 这种"发一句话，指示灯黄一下就绿了，什么都没有"——不该要求先
                 # 用过工具才有安全网，改成只要交白卷就补一次。
                 if not full_text.strip():
+                    # 落一条 WARNING（明文，进 logs/jarvis.log）：不管兜底后面
+                    # 成不成功，"模型这轮交了白卷"这件事本身值得留痕，方便回头
+                    # grep model/finish_reason 统计是不是某个供应商的系统性问题。
+                    logging.getLogger("jarvis.controller").warning(
+                        "本轮补全为空（model=%s, finish_reason=%r, tool_rounds=%d），触发最终必答兜底",
+                        self.model, finish_reason, tool_rounds)
                     fallback = await _forced_text_summary(
                         self.client, system, self.messages, used_tools=tool_rounds > 0)
                     if fallback:
@@ -628,7 +634,11 @@ class JarvisController:
                     else:
                         # 补答本身也失败/仍是空——不能让这一轮彻底静音。哪怕问题
                         # 没解决，至少让用户看见"这轮真的什么都没发生"，而不是
-                        # 误以为消息发丢了或程序卡住。
+                        # 误以为消息发丢了或程序卡住。同时留一条更高级别的日志，
+                        # 因为这种"连兜底都救不回来"的情况比单纯白卷更值得关注。
+                        logging.getLogger("jarvis.controller").error(
+                            "本轮补全为空且兜底总结也失败（model=%s），已下发静默提示给用户",
+                            self.model)
                         notice = ("（这一轮没能生成任何文字回复，可能是模型这次返回"
                                   "异常。可以换个问法，或直接回复「继续」再试一次；"
                                   "如果反复出现，把这条提示发给我核实。）")

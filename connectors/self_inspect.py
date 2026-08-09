@@ -39,6 +39,10 @@ _DENY_PARTS = {".env", ".venv", ".git", "__pycache__", "node_modules", "data"}
 # 单文件读取行数上限（超出截断，避免撑爆上下文）
 _MAX_LINES = 2000
 
+# 运行日志（main.py._setup_logging 写的那份明文滚动日志）
+_LOG_PATH = REPO_ROOT / "logs" / "jarvis.log"
+_MAX_LOG_LINES = 500
+
 
 def _loc(p: Path) -> int:
     try:
@@ -186,3 +190,60 @@ async def read_self_source(path: str) -> str:
         f"{'─' * 48}\n"
         f"{text}{truncated}"
     )
+
+
+@tool(
+    "read_recent_logs",
+    "读取贾维斯自己最近的运行日志（logs/jarvis.log，明文、带完整异常堆栈）。"
+    "用户反馈'刚才静默失败/报错/卡住了'时用这个回头查——尤其能确认某次对话是"
+    "真的抛了异常（会有 traceback）、还是模型交了白卷（会有'本轮补全为空'的"
+    "WARNING）、又或者是别的原因。只读；lines 控制返回最近多少行（默认100，"
+    "上限500），level/keyword 可选过滤缩小范围（level 如 ERROR/WARNING，"
+    "keyword 按子串匹配、大小写不敏感，比如传 session id 或某个模块名）。",
+    {
+        "type": "object",
+        "properties": {
+            "lines": {"type": "integer", "description": "返回最近多少行日志，默认100，上限500"},
+            "level": {"type": "string", "description": "只看这个级别，如 ERROR / WARNING / INFO，留空不过滤"},
+            "keyword": {"type": "string", "description": "按子串过滤（如 session id、模块名），留空不过滤"},
+        },
+    },
+)
+async def read_recent_logs(lines: int = 100, level: str = "", keyword: str = "") -> str:
+    if not _LOG_PATH.exists():
+        try:
+            shown = _LOG_PATH.relative_to(REPO_ROOT).as_posix()
+        except ValueError:
+            shown = str(_LOG_PATH)   # 测试等场景日志路径不在仓库内，原样显示绝对路径
+        return (f"日志文件不存在：{shown}"
+                f"（可能进程还没写过日志，或还没重启到带日志配置的版本）。")
+
+    lines = max(1, min(int(lines or 100), _MAX_LOG_LINES))
+    level = (level or "").strip().upper()
+    keyword = (keyword or "").strip().lower()
+
+    try:
+        with open(_LOG_PATH, encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+    except Exception as e:
+        return f"读取日志失败：{e}"
+
+    filtered = []
+    for ln in all_lines:
+        if level and f"| {level} |" not in ln:
+            continue
+        if keyword and keyword not in ln.lower():
+            continue
+        filtered.append(ln.rstrip("\n"))
+
+    tail = filtered[-lines:]
+    if not tail:
+        cond = ", ".join(
+            p for p in (f"level={level}" if level else "", f"keyword={keyword!r}" if keyword else "") if p)
+        cond_note = f"（过滤条件：{cond}）" if cond else ""
+        return f"没有匹配的日志行{cond_note}。日志文件总行数：{len(all_lines)}。"
+
+    header = f"logs/jarvis.log 最近 {len(tail)} 行"
+    if level or keyword:
+        header += f"（已过滤：level={level or '不限'}, keyword={keyword or '不限'}）"
+    return header + "\n" + "─" * 48 + "\n" + "\n".join(tail)
