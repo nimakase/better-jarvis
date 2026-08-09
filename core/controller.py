@@ -383,6 +383,10 @@ BACKGROUND_BLOCKED_TOOLS = {
     "save_entity", "remember_episode",                           # 写实体(L2)/情节(L4)记忆
     "create_tool", "edit_tool", "delete_tool", "activate_tool", "update_tool_code",  # 自建/改/删/激活工具
     "create_schedule", "delete_schedule", "pause_schedule", "resume_schedule",  # 改定时任务
+    # 计划模式（core/engineering.py）：确认闸依赖"用户看得到、能回话"这个前提，
+    # 后台/定时/子agent 场景没有这个前提，一律屏蔽。
+    "propose_engineering_change", "execute_engineering_change", "write_open_file",
+    "run_repo_test", "finalize_engineering_change", "abandon_engineering_change",
 }
 
 

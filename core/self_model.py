@@ -52,6 +52,8 @@ PROTECTED: dict[str, str] = {
     "core/consolidation.py": "记忆巩固：机械闸(证据/去重/限量/只软删)守档案完整性",
     "core/drift.py":        "自我漂移检测：喂和解闸与冷却判据；可自改即可致盲护栏",
     "core/llm.py":          "模型客户端单一构建点（超时政策统一处；改它影响全部模型调用）",
+    "core/engineering.py":              "计划模式执行器：落地人已想清楚的多文件改动，可写PROTECTED边界须与self_iteration同源，须人工",
+    "connectors/engineering_tools.py":  "计划模式对话入口；改它=改「谁能触发落地」，须人工",
     # 证件保险箱安全边界（物理上在 connectors/，逻辑上属核心）
     "connectors/vault.py":       "证件保险箱加密存储核心",
     "connectors/credentials.py": "证件工具（真实号绝不上云的边界）",
@@ -73,6 +75,7 @@ OPEN: dict[str, str] = {
     "connectors/calendar_card.py":      "日历情报卡",
     "connectors/report_tools.py":       "报告工具",
     "connectors/workflow_tools.py":     "工作流工具",
+    "connectors/customer_loop_tools.py": "客户循环夜间工作流注册（v2 编排接线；业务性质，可自我迭代）",
     "connectors/delivery_control.py":   "投递控制",
     # 业务逻辑层（core 里偏内容的）
     "core/reports.py":          "报告类型注册",

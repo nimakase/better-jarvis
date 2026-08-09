@@ -2,6 +2,22 @@
 
 > 个人 AI 助理 · 本地优先（local-first）· 可安装 Python 包 · **当前版本 v1.0.0**
 >
+> 更新日期：2026-08-09 · **计划模式（`core/engineering.py` + `connectors/engineering_tools.py`，均 🔒 PROTECTED）**——
+> 贾维斯此前碰第一方代码只有两条路：`tool_builder`（只能写 `skills/` 沙箱单文件）与
+> `self_iteration`/`self_review`（只接受**模型自主生成**的单文件提案，经必要性闸过滤）。
+> 两条都接不住"用户/Claude 在对话里已经把改动内容想清楚、点名了具体多个文件"这种场景——
+> 这正是触发 [[deepseek-migration-status]] 那次真实事故的根因（诊断详见
+> `docs/贾维斯vsHermes-架构对比与借鉴.md` 及其引用的设计草案）。新增五个工具补上这条路：
+> `propose_engineering_change`（登记多文件计划，READ_LOCAL，不写文件）→
+> `execute_engineering_change`（过 `ConfirmGate`，一次确认解锁整个计划，不是逐文件确认）→
+> `write_open_file`（只能写计划登记过、且 `self_model.classify()` 判定 OPEN 的路径，
+> PROTECTED 一律拒绝；首次写入前自动快照）→`run_repo_test`（受限于 `tests/run_all.py`
+> 或计划内新建的 `tests/test_auto_*.py`，不是通用脚本执行器）→`finalize_engineering_change`
+> （跑全量 gate，绿才 git 提交，红则整计划一次性回滚，不留半成品）；另有 `abandon_engineering_change`
+> 供用户中途改主意。六个工具在后台/定时/子agent 实例一律屏蔽（`BACKGROUND_BLOCKED_TOOLS`）——
+> 确认闸依赖"用户看得到、能回话"，后台场景没有这个前提。核心逻辑仿 `SelfIterator` 做成可注入
+> 依赖的 `Engineer` 类，便于临时仓库单测（`tests/test_engineering.py`）。
+>
 > 🏁 **v1.0.0 里程碑（2026-07-18）**：首个正式大版本。全量代码审查后的整理提交：
 > 修复 env probe 路径缺 `import asyncio` 的 NameError；清除全部无用 import 与死赋值
 > （pyflakes 零告警，controller/main 两处有意保留的注册用导入除外）；删除已失效的
