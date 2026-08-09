@@ -7,6 +7,7 @@
 
 import json
 import os
+import re
 import asyncio
 import logging
 from datetime import datetime
@@ -26,6 +27,16 @@ _COMPRESS_TIMEOUT = float(os.environ.get("JARVIS_COMPRESS_TIMEOUT", "30"))
 # 压缩摘要的输入上限（字符），避免历史巨大时把摘要调用拖慢。
 _COMPRESS_INPUT_CAP = int(os.environ.get("JARVIS_COMPRESS_INPUT_CAP", "12000"))
 
+# content 通道特殊符号泄漏检测（2026-08-09 实测发现）：模型在长生成快顶到
+# max_tokens 时，偶尔会退化成把工具调用协议的特殊分隔符（DeepSeek 形如
+# `<｜tool▁calls▁begin｜>`，全角竖线 U+FF5C + sentencepiece 词边界符 U+2581）
+# 当普通文字直接写进 content，而不是走结构化 tool_calls 通道——这段半成品协议
+# 符号会被原样透传给用户（看起来像一坨乱码）。这两个字符在正常中英文/代码里
+# 几乎不会出现，所以只要求"< 和 > 之间某处出现过其一"就判定命中，不需要更严格
+# 的位置限制——既能抓住真实样本，又不误伤普通文本里的 <tag> / a<b 这类用法
+# （那些内部不含这两个字符）。
+_LEAKED_TOKEN_RE = re.compile(r"<[^<>]{0,20}[｜▁][^<>]{0,100}>")
+
 from openai import AsyncOpenAI
 
 import time as _time
@@ -43,6 +54,7 @@ from core import trust as _trust
 from core import reports as _reports
 from core import workflow_registry as _workflows
 from core import calendar as _calendar
+from core import engineering as _engineering
 from core.results import ToolResult
 # 向后兼容：连接器/技能仍可 `from core.controller import register_tool`
 from core.registry import register_tool
@@ -383,11 +395,33 @@ BACKGROUND_BLOCKED_TOOLS = {
     "save_entity", "remember_episode",                           # 写实体(L2)/情节(L4)记忆
     "create_tool", "edit_tool", "delete_tool", "activate_tool", "update_tool_code",  # 自建/改/删/激活工具
     "create_schedule", "delete_schedule", "pause_schedule", "resume_schedule",  # 改定时任务
-    # 计划模式（core/engineering.py）：确认闸依赖"用户看得到、能回话"这个前提，
-    # 后台/定时/子agent 场景没有这个前提，一律屏蔽。
-    "propose_engineering_change", "execute_engineering_change", "write_open_file",
-    "run_repo_test", "finalize_engineering_change", "abandon_engineering_change",
+    # 计划模式（core/engineering.py）——确认模型（2026-08-09 重设，借鉴商业 agent
+    # "批一次、之后自主执行、关键节点仍需人在场"的模式）：开新范围(propose)、确认闸
+    # 本身(execute)、提交(finalize)、作废(abandon) 这四步依赖"用户看得到、能回话"
+    # 这个前提，后台/定时/子agent 场景没有这个前提，一律屏蔽、也不暴露给模型。
+    "propose_engineering_change", "execute_engineering_change",
+    "finalize_engineering_change", "abandon_engineering_change",
 }
+
+# 计划范围内有条件放行的写工具：只要对应 plan_id 已经被交互式会话确认过
+# （confirmed/executing），后台/子agent 就可以继续对这个已批准的计划落盘——
+# 批准的是"这整个计划"，不是"某一次具体的写入动作"。会暴露给后台会话，具体
+# 能不能执行由 _plan_write_allowed() 在执行时按 plan_id 现查（见调用处）。
+# run_repo_test 只读不写，不在此列，直接不受任何后台限制。
+PLAN_SCOPED_WRITE_TOOLS = {"write_open_file", "patch_open_file", "append_to_file"}
+
+
+def _plan_write_allowed(tc_name: str, inputs: dict) -> "tuple[bool, str]":
+    """PLAN_SCOPED_WRITE_TOOLS 的后台执行闸：plan_id 对应的计划必须已经在某次
+    交互式会话里被 execute_engineering_change 确认过，否则拒绝——防止后台/子
+    agent 借着"这几个工具没被暴露屏蔽"绕开人工确认，直接对未经批准的计划写入。"""
+    plan_id = inputs.get("plan_id", "") if isinstance(inputs, dict) else ""
+    if _engineering.is_confirmed(plan_id):
+        return True, ""
+    return False, (f"（后台运行环境：{tc_name} 只能用于已经过交互式会话确认的计划——"
+                   f"plan_id={plan_id!r} 未确认或不存在，已拒绝。请先在交互式会话里"
+                   f"propose_engineering_change + execute_engineering_change 确认这个"
+                   f"计划，再回到后台/子agent 继续按已批准的范围写。）")
 
 
 # ── 主控对话循环 ──────────────────────────────────────────────────────────────
@@ -570,10 +604,21 @@ class JarvisController:
             # 这是 DeepSeek 专属扩展字段，OpenAI 官方 SDK 的类型定义不一定有它，
             # 其它 provider 上 delta 上取不到就是 None，零行为影响。
             full_reasoning = ""
+            # content 通道特殊符号泄漏检测（见 _LEAKED_TOKEN_RE 定义处说明）。
+            content_leaked = False
+
+            # 分场景 token 预算：engineering 组一旦被激活（写代码/改文件的任务），
+            # 单轮输出量天然更大，用更宽的上限；其余对话轮仍用保守默认值。
+            # progressive_tools 关闭时 active_groups 不一定会被及时标记，这种
+            # 配置下退回默认值——不是当前生产默认配置，可接受。
+            effective_max_tokens = (
+                config.MAX_TOKENS_ENGINEERING if "engineering" in self.active_groups
+                else config.MAX_TOKENS_RESPONSE
+            )
 
             stream = await self.client.chat.completions.create(
                 model=self.model,
-                max_tokens=config.MAX_TOKENS_RESPONSE,
+                max_tokens=effective_max_tokens,
                 messages=[{"role": "system", "content": system}] + self.messages,
                 tools=tools,
                 tool_choice="auto",
@@ -592,7 +637,16 @@ class JarvisController:
                 # 文字内容
                 if delta.content:
                     full_text += delta.content
-                    yield {"type": "text", "text": delta.content}
+                    if not content_leaked and _LEAKED_TOKEN_RE.search(full_text):
+                        # 命中疑似工具调用协议符号残片：这轮已经不可信，停止继续
+                        # 透传给用户（已经发出去的那部分止不住，但能截住剩下的）。
+                        content_leaked = True
+                        logging.getLogger("jarvis.controller").warning(
+                            "本轮 content 通道检测到疑似工具调用协议符号泄漏"
+                            "（model=%s, finish_reason=%r），已停止透传剩余内容，按失败轮处理。",
+                            self.model, finish_reason)
+                    if not content_leaked:
+                        yield {"type": "text", "text": delta.content}
 
                 # 隐藏推理内容（DeepSeek 思考模式扩展字段）：只攒，不进正文流，
                 # 不展示给用户——它是"怎么想的"，不是"最终答案"。
@@ -613,6 +667,13 @@ class JarvisController:
                                 tool_call_accum[idx]["name"] += tc_delta.function.name
                             if tc_delta.function.arguments:
                                 tool_call_accum[idx]["arguments"] += tc_delta.function.arguments
+
+            if content_leaked:
+                # 泄漏出来的半成品协议符号不能当正常回复，也不能信这轮声称的
+                # 工具调用——清空后统一走下面"交白卷"兜底同一条路（强制补总结/
+                # 给可见提示），不写进历史，不执行任何工具。
+                full_text = ""
+                tool_call_accum = {}
 
             # 没有工具调用，正常结束
             if finish_reason != "tool_calls" or not tool_call_accum:
@@ -694,7 +755,23 @@ class JarvisController:
                 try:
                     inputs = json.loads(tc["arguments"]) if tc["arguments"] else {}
                 except json.JSONDecodeError:
-                    inputs = {}
+                    # 参数解析失败（常见于长生成被截断，参数 JSON 没收尾）——不能
+                    # 当"空参数"悄悄执行，那会让工具拿着缺胳膊少腿的输入真的跑
+                    # 起来（2026-08-09 实测：write_open_file 曾经这样被空内容
+                    # 调用过）。判定这次工具调用整体失败，不执行，让模型知道要
+                    # 重试，而不是继续往下走当成正常调用。
+                    logging.getLogger("jarvis.controller").warning(
+                        "工具调用参数解析失败，判定失败并跳过执行（tool=%s, model=%s, "
+                        "finish_reason=%r，可能是生成被截断）",
+                        tc["name"], self.model, finish_reason)
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": (f"（工具调用 {tc['name']} 的参数解析失败，很可能是这轮生成"
+                                    f"被截断、参数没写完整——本次调用未执行。请重新生成这次调用，"
+                                    f"必要时把要写的内容拆得更小一些再试。）"),
+                    })
+                    continue
 
                 # 渐进披露：load_tools 是控制器级元工具（不在注册表里），
                 # 仅在开启时拦截；激活领域后下一轮即可见到该组工具。
@@ -717,6 +794,18 @@ class JarvisController:
                         "content": f"（后台运行环境，已禁用工具 {tc['name']}：不写用户个人记忆/不自建工具或调度。请直接完成本职任务并输出结果。）",
                     })
                     continue
+
+                # 计划范围写工具（2026-08-09 确认模型重设）：后台/子agent 只能对
+                # 已经过交互式会话确认的 plan_id 继续落盘，新范围/未确认一律拒绝。
+                if not self.interactive and tc["name"] in PLAN_SCOPED_WRITE_TOOLS:
+                    allowed_write, block_msg = _plan_write_allowed(tc["name"], inputs)
+                    if not allowed_write:
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": block_msg,
+                        })
+                        continue
 
                 # 白名单执行层兜底（⑧）：即便模型硬调未授权工具也不执行（fail-safe）。
                 if self.allowed_tools is not None and tc["name"] not in self.allowed_tools:

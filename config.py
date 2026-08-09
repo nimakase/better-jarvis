@@ -94,6 +94,13 @@ class Settings(BaseSettings):
     # 对话控制
     max_history_turns: int = 20
     max_tokens_response: int = 4096
+    # 工程改动（core/engineering.py 那一组工具激活时）用更宽的输出预算——写代码
+    # 这类任务单次生成量天然更大，4096 这个默认值是给普通对话轮设的，偏保守。
+    # DeepSeek 官方文档：max_tokens 合法范围到 8192（部分模型/模式下更高）；这里
+    # 先按文档给的上限设，不是瞎猜。有了 patch_open_file/append_to_file 之后，
+    # 大多数改动其实用不上这么多，这一档更多是给"确实要整篇重写/新建文件起始
+    # 内容"这类兜底场景留余量，不是主要的解法（主要解法是把改动切小）。
+    max_tokens_engineering: int = Field(default=8192, validation_alias="JARVIS_MAX_TOKENS_ENGINEERING")
     context_window_soft_limit: int = 800_000
 
     # 会话回收：客户端自带 session_id 的控制器若不回收会随进程缓慢增长内存。
@@ -194,6 +201,7 @@ BITABLE_TABLE_ID    = settings.bitable_table_id
 
 MAX_HISTORY_TURNS         = settings.max_history_turns
 MAX_TOKENS_RESPONSE       = settings.max_tokens_response
+MAX_TOKENS_ENGINEERING    = settings.max_tokens_engineering
 CONTEXT_WINDOW_SOFT_LIMIT = settings.context_window_soft_limit
 
 SESSION_TTL_SECONDS = settings.session_ttl_seconds

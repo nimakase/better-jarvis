@@ -63,11 +63,21 @@ class PlannedFile:
 
 
 @dataclass
+class PlanStep:
+    """计划里的一个小步骤（纯组织/展示用，不机械强制）——引导模型把一个大改动
+    先拆成几个小块再动手，而不是憋着一次性生成一整份大文件。"""
+    description: str
+    files: list[str] = field(default_factory=list)
+    status: str = "pending"      # pending | done
+
+
+@dataclass
 class Plan:
     plan_id: str
     summary: str
     rationale: str
     files: dict[str, PlannedFile] = field(default_factory=dict)
+    steps: list[PlanStep] = field(default_factory=list)
     status: str = "proposed"     # proposed | confirmed | executing | applied | rolled_back
     created_at: str = ""
 
@@ -108,19 +118,33 @@ class Engineer:
         return len(p.parts) == 2 and p.parts[0] == "tests" and p.name.startswith(AUTO_TEST_PREFIX)
 
     # ── 计划的生命周期 ──────────────────────────────────────────────────────
-    def propose(self, summary: str, files: list[str], rationale: str = "") -> Plan:
+    def propose(self, summary: str, files: list[str], rationale: str = "",
+                steps: "list[dict] | None" = None) -> Plan:
         """登记一个新计划，不碰任何文件。每个文件路径预检一次，结果存进
         PlannedFile.blocked_reason（非空 = 这个文件将来写不了），供
-        render_plan() 提前示警。"""
+        render_plan() 提前示警。
+
+        steps（可选）：把改动拆成几个小步骤，每步 {"description": str,
+        "files": [...]}——不是机械约束（漏写/不写都不影响能不能落地），
+        是引导模型把一次改动拆小：有了步骤划分，绝大多数落地动作天然就是
+        "改一小段/追加一小段"，而不是被迫一次性重写整份大文件。"""
         plan_id = uuid.uuid4().hex[:8]
         planned: dict[str, PlannedFile] = {}
         for raw in files:
             rel = Path(raw).as_posix()
             ok, reason = self.check_path(rel)
             planned[rel] = PlannedFile(path=rel, blocked_reason="" if ok else reason)
+        plan_steps: list[PlanStep] = []
+        for raw_step in (steps or []):
+            desc = str(raw_step.get("description", "")).strip()
+            if not desc:
+                continue
+            step_files = [Path(f).as_posix() for f in raw_step.get("files", [])]
+            plan_steps.append(PlanStep(description=desc, files=step_files))
         plan = Plan(
             plan_id=plan_id, summary=summary.strip(), rationale=rationale.strip(),
-            files=planned, created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            files=planned, steps=plan_steps,
+            created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )
         self.plans[plan_id] = plan
         return plan
@@ -128,10 +152,46 @@ class Engineer:
     def get(self, plan_id: str) -> "Plan | None":
         return self.plans.get(plan_id)
 
+    def is_confirmed(self, plan_id: str) -> bool:
+        """给后台/子agent 场景的确认闸判断用：这个计划是不是已经被交互式会话
+        确认过（confirmed/executing）。applied/rolled_back/不存在 一律算否——
+        非交互场景只能在"已批准且尚未收尾"的窗口内继续写。"""
+        plan = self.get(plan_id)
+        return plan is not None and plan.status in ("confirmed", "executing")
+
+    def _advance_steps(self, plan: Plan) -> None:
+        """一个步骤登记的文件全部落盘(written)后，标记该步骤 done——纯展示用，
+        不影响能不能继续写其它文件。"""
+        for st in plan.steps:
+            if st.status == "done" or not st.files:
+                continue
+            if all(plan.files.get(f) is not None and plan.files[f].status == "written"
+                   for f in st.files):
+                st.status = "done"
+
+    def _syntax_warning(self, rel: str, content: str) -> str:
+        """写完一小步立刻做一次语法自检（仅 .py，只 compile 不执行）——把语法
+        错误在改动量还小、上下文还干净的时候截住，不用等 finalize 跑全量测试
+        才第一次发现。逻辑/类型层面的问题不归这层管，那是 finalize gate 的职责。"""
+        if not rel.endswith(".py"):
+            return ""
+        try:
+            compile(content, rel, "exec")
+            return ""
+        except SyntaxError as e:
+            return (f"\n⚠️ 语法自检未通过（第 {e.lineno} 行）：{e.msg}——"
+                    f"finalize 前请修好，不然全量测试会红。")
+
     def render_plan(self, plan: Plan) -> str:
         lines = [f"【计划 {plan.plan_id}】{plan.summary}"]
         if plan.rationale:
             lines.append(f"动机：{plan.rationale}")
+        if plan.steps:
+            lines.append("拆分步骤（建议按顺序小步执行，每步只落地自己范围内的改动）：")
+            for i, st in enumerate(plan.steps, 1):
+                mark = "✓" if st.status == "done" else "·"
+                extra = f"（{', '.join(st.files)}）" if st.files else ""
+                lines.append(f"  {mark} 步骤{i}：{st.description}{extra}")
         lines.append("涉及文件：")
         for pf in plan.files.values():
             if pf.blocked_reason:
@@ -178,7 +238,83 @@ class Engineer:
         target.write_text(content, encoding="utf-8")
         pf.status = "written"
         plan.status = "executing"
-        return True, f"已写入 {rel}（{len(content)} 字符）。"
+        self._advance_steps(plan)
+        warn = self._syntax_warning(rel, content)
+        return True, f"已写入 {rel}（{len(content)} 字符）。{warn}"
+
+    def patch_file(self, plan_id: str, path: str, old_text: str, new_text: str) -> tuple[bool, str]:
+        """增量编辑：对一个已存在的文件做一次精确的旧文本→新文本替换，只需要
+        生成变化的那一小段，不用把整份文件内容再吐一遍——日常改动的默认方式，
+        write_file 应该只留给"新建文件的起始内容"或"确实要整体重写"这两种场景。
+        old_text 必须在当前内容里【恰好出现一次】，避免替换到错误位置。"""
+        plan = self.get(plan_id)
+        if plan is None:
+            return False, f"计划 {plan_id} 不存在，请先调用 propose_engineering_change。"
+        if plan.status == "applied":
+            return False, "该计划已经落地过了，不能再写（如需再改，请开一个新计划）。"
+        if plan.status not in ("confirmed", "executing"):
+            return False, "该计划尚未经过确认执行（先调用 execute_engineering_change 并等待用户确认）。"
+        rel = Path(path).as_posix()
+        pf = plan.files.get(rel)
+        if pf is None:
+            return False, f"{rel} 不在本计划登记的文件清单内（只能写 propose 时列出的文件）。"
+        if pf.blocked_reason:
+            return False, f"拒绝写入受保护路径 {rel}：{pf.blocked_reason}"
+        target = self.repo / rel
+        if not pf.snapshotted:
+            pf.existed = target.exists()
+            pf.backup = target.read_text(encoding="utf-8") if pf.existed else ""
+            pf.snapshotted = True
+        if not target.exists():
+            return False, (f"{rel} 尚不存在，patch_open_file 只能改已存在的内容——"
+                           f"新文件请用 write_open_file（起始内容）或 append_to_file（分段建立）。")
+        current = target.read_text(encoding="utf-8")
+        count = current.count(old_text)
+        if count == 0:
+            return False, f"在 {rel} 里没找到要替换的 old_text（可能已经被改过，或复制得不完全一致）。"
+        if count > 1:
+            return False, (f"old_text 在 {rel} 里出现了 {count} 次，位置不唯一，拒绝执行——"
+                           f"请把 old_text 写得更具体（带上更多上下文），保证只匹配一处。")
+        new_content = current.replace(old_text, new_text, 1)
+        target.write_text(new_content, encoding="utf-8")
+        pf.status = "written"
+        plan.status = "executing"
+        self._advance_steps(plan)
+        warn = self._syntax_warning(rel, new_content)
+        return True, f"已对 {rel} 打补丁（旧文本 {len(old_text)} 字符 → 新文本 {len(new_text)} 字符）。{warn}"
+
+    def append_file(self, plan_id: str, path: str, content: str) -> tuple[bool, str]:
+        """分片写入：新建或续写一个体量较大的文件时，按段追加，不需要一次生成
+        全文——每次调用只吐这一段的内容，多次调用自然拼成完整文件。文件本来
+        不存在时，第一次调用等价于新建；已存在则接着往后面加。"""
+        plan = self.get(plan_id)
+        if plan is None:
+            return False, f"计划 {plan_id} 不存在，请先调用 propose_engineering_change。"
+        if plan.status == "applied":
+            return False, "该计划已经落地过了，不能再写（如需再改，请开一个新计划）。"
+        if plan.status not in ("confirmed", "executing"):
+            return False, "该计划尚未经过确认执行（先调用 execute_engineering_change 并等待用户确认）。"
+        rel = Path(path).as_posix()
+        pf = plan.files.get(rel)
+        if pf is None:
+            return False, f"{rel} 不在本计划登记的文件清单内（只能写 propose 时列出的文件）。"
+        if pf.blocked_reason:
+            return False, f"拒绝写入受保护路径 {rel}：{pf.blocked_reason}"
+        target = self.repo / rel
+        if not pf.snapshotted:
+            pf.existed = target.exists()
+            pf.backup = target.read_text(encoding="utf-8") if pf.existed else ""
+            pf.snapshotted = True
+        target.parent.mkdir(parents=True, exist_ok=True)
+        mode = "a" if target.exists() else "w"
+        with target.open(mode, encoding="utf-8") as f:
+            f.write(content)
+        pf.status = "written"
+        plan.status = "executing"
+        self._advance_steps(plan)
+        final_content = target.read_text(encoding="utf-8")
+        warn = self._syntax_warning(rel, final_content)
+        return True, (f"已向 {rel} 追加 {len(content)} 字符（当前共 {len(final_content)} 字符）。{warn}")
 
     def rollback(self, plan_id: str) -> None:
         """把计划涉及的、已写入的文件精确复原到计划开始前的状态。"""
@@ -194,6 +330,8 @@ class Engineer:
             elif target.exists():
                 target.unlink()
             pf.status = "rolled_back"
+        for st in plan.steps:
+            st.status = "pending"
         plan.status = "rolled_back"
 
     def abandon(self, plan_id: str) -> tuple[bool, str]:
@@ -270,12 +408,17 @@ def _get_default() -> Engineer:
     return _default
 
 
-def propose(summary: str, files: list, rationale: str = "") -> Plan:
-    return _get_default().propose(summary, files, rationale)
+def propose(summary: str, files: list, rationale: str = "",
+            steps: "list[dict] | None" = None) -> Plan:
+    return _get_default().propose(summary, files, rationale, steps)
 
 
 def get(plan_id: str) -> "Plan | None":
     return _get_default().get(plan_id)
+
+
+def is_confirmed(plan_id: str) -> bool:
+    return _get_default().is_confirmed(plan_id)
 
 
 def render_plan(plan: Plan) -> str:
@@ -288,6 +431,14 @@ def confirm(plan_id: str) -> "Plan | None":
 
 def write_file(plan_id: str, path: str, content: str) -> tuple[bool, str]:
     return _get_default().write_file(plan_id, path, content)
+
+
+def patch_file(plan_id: str, path: str, old_text: str, new_text: str) -> tuple[bool, str]:
+    return _get_default().patch_file(plan_id, path, old_text, new_text)
+
+
+def append_file(plan_id: str, path: str, content: str) -> tuple[bool, str]:
+    return _get_default().append_file(plan_id, path, content)
 
 
 def rollback(plan_id: str) -> None:

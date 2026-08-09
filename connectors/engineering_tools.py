@@ -7,22 +7,32 @@
 "用户/Claude 在对话里已经把改动内容想清楚了，贾维斯只需要安全落地"。
 
 设计详见 core/engineering.py 顶部注释；这里只管对话层接线。护栏摘要：
-  - `propose_engineering_change` 只登记不写文件，READ_LOCAL，不需要确认。
+  - `propose_engineering_change` 只登记不写文件，READ_LOCAL，不需要确认；
+    可选带 `steps` 把改动先拆成小步骤（引导默认走小改动，不是机械约束）。
   - `execute_engineering_change` 效应等级 WRITE_EXTERNAL，过 core.effects
     的 ConfirmGate——同一个 plan_id 首次调用会被机械拦下（模型把完整计划
     文本复述给用户看），用户确认后模型原样再调一次才真正解锁。**一次确认
     覆盖整个多文件计划**，不是逐文件确认。
-  - `write_open_file` 只能写"已批准计划"登记过的文件路径，且必须是
-    `self_model` 判定为 OPEN 的路径（PROTECTED 一律拒绝，不生成二次审核
-    提案——真要碰 PROTECTED 不是这条通道的职责）。
+  - `patch_open_file`（默认改法）只传旧文本→新文本做精确替换；`append_to_file`
+    用于分段构建体量较大的新文件；`write_open_file` 收窄成"新建文件起始内容/
+    确实要整体重写"时才用的兜底手段——三者都只能碰"已批准计划"登记过的文件
+    路径，且必须是 `self_model` 判定为 OPEN 的路径（PROTECTED 一律拒绝，不
+    生成二次审核提案——真要碰 PROTECTED 不是这条通道的职责）。三者写完都会
+    对 .py 文件做一次语法自检，有问题立刻在返回文本里提示，不用等 finalize。
   - `finalize_engineering_change` 跑全量测试 gate，绿才提交；红则整个计划
     涉及的文件一次性回滚，不留半成品。
   - `abandon_engineering_change` 供用户中途改主意时用：回滚已写入的部分、
     作废计划。
-  - 这五个工具在后台/定时/子agent实例里一律屏蔽（见 core/controller.py 的
-    BACKGROUND_BLOCKED_TOOLS）——计划模式的确认闸依赖"用户看得到、能回话"
-    这个前提，后台场景没有这个前提；子agent默认白名单本来就只有只读工具，
-    这五个 write_external/write_local 级工具天然不在其中，无需额外过滤。
+  - 确认模型（借鉴商业 agent"批一次、之后自主执行、关键节点仍需人在场"的
+    模式）：`propose_engineering_change`/`execute_engineering_change`/
+    `finalize_engineering_change`/`abandon_engineering_change` 这四个（开
+    新范围、确认闸本身、提交、作废）在后台/定时/子agent 实例里一律屏蔽，
+    见 core/controller.py 的 BACKGROUND_BLOCKED_TOOLS——这几步依赖"用户看
+    得到、能回话"这个前提。`write_open_file`/`patch_open_file`/
+    `append_to_file` 改成【计划范围内有条件放行】：只要对应 plan_id 已经
+    被交互式会话确认过（confirmed/executing），后台 worker/子agent 就能
+    继续对这个已批准的计划落盘，不用每次写文件都拉人在场——批准的是计划
+    整体，不是某一次具体的写入动作。`run_repo_test` 只读不写，不受此限制。
 """
 from __future__ import annotations
 
@@ -37,8 +47,10 @@ GROUP = "engineering"
     "propose_engineering_change",
     "登记一个多文件工程改动计划（不写任何文件）。用于「用户已经把改动内容想清楚、"
     "点名了具体文件」的场景——不要用来处理不确定该怎么改的问题（那种情况直接改代码"
-    "讨论清楚，或走 run_self_review 的自主反思闭环）。返回渲染好的计划文本（含每个"
-    "文件是否可写的预检结果），登记后用 execute_engineering_change(plan_id) 解锁写入。",
+    "讨论清楚，或走 run_self_review 的自主反思闭环）。改动稍大时【建议】带上 steps，"
+    "先把它拆成几个小步骤——这样后面落地时天然就是一步一小段（patch/append），"
+    "不用被迫一次性生成一整份大文件。返回渲染好的计划文本（含每个文件是否可写的"
+    "预检结果），登记后用 execute_engineering_change(plan_id) 解锁写入。",
     {
         "type": "object",
         "properties": {
@@ -46,13 +58,24 @@ GROUP = "engineering"
             "files": {"type": "array", "items": {"type": "string"},
                       "description": "计划涉及的文件路径清单（相对仓库根），如 ['core/foo.py', 'tests/test_auto_foo.py']"},
             "rationale": {"type": "string", "description": "为什么要这么改（可选）"},
+            "steps": {"type": "array",
+                      "description": "可选：把改动拆成几个小步骤，便于后面按步骤小段落地。"
+                                     "每项 {description, files}，files 是该步骤涉及的文件子集。",
+                      "items": {
+                          "type": "object",
+                          "properties": {
+                              "description": {"type": "string"},
+                              "files": {"type": "array", "items": {"type": "string"}},
+                          },
+                          "required": ["description"],
+                      }},
         },
         "required": ["summary", "files"],
     },
     group=GROUP, effect=effects.READ_LOCAL,
 )
-def propose_engineering_change(summary: str, files: list, rationale: str = "") -> str:
-    plan = engineering.propose(summary, files, rationale)
+def propose_engineering_change(summary: str, files: list, rationale: str = "", steps: list = None) -> str:
+    plan = engineering.propose(summary, files, rationale, steps)
     return engineering.render_plan(plan)
 
 
@@ -82,9 +105,12 @@ def execute_engineering_change(plan_id: str) -> str:
 
 @tool(
     "write_open_file",
-    "把内容写入一个已批准计划里登记过的文件（原子写入，首次写入前自动做快照，"
-    "供计划失败时整体回滚）。只能写 propose 时列出的路径，且该路径必须不受保护——"
-    "受保护路径会被拒绝，不能绕开。",
+    "把【完整】内容写入一个已批准计划里登记过的文件（原子写入，首次写入前自动做"
+    "快照，供计划失败时整体回滚）。这是整篇覆盖的兜底手段，只用于「新建文件的"
+    "起始内容」或「确实需要整体重写」——日常小改动请优先用 patch_open_file（改"
+    "一小段），新建的大文件请用 append_to_file 分段构建，不要为了改几行就把整个"
+    "文件内容重新生成一遍。只能写 propose 时列出的路径，且该路径必须不受保护——"
+    "受保护路径会被拒绝，不能绕开。写完会对 .py 文件做一次语法自检，结果附在返回文本里。",
     {
         "type": "object",
         "properties": {
@@ -98,6 +124,51 @@ def execute_engineering_change(plan_id: str) -> str:
 )
 def write_open_file(plan_id: str, path: str, content: str) -> str:
     ok, msg = engineering.write_file(plan_id, path, content)
+    return msg
+
+
+@tool(
+    "patch_open_file",
+    "对一个已存在的文件做一次精确的旧文本→新文本替换——日常改动的【默认方式】，"
+    "只需要生成变化的那一小段，不用把整份文件内容再吐一遍。old_text 必须在当前"
+    "文件内容里恰好出现一次（建议带上足够上下文保证唯一），否则会被拒绝。写完"
+    "会对 .py 文件做一次语法自检，结果附在返回文本里。",
+    {
+        "type": "object",
+        "properties": {
+            "plan_id": {"type": "string"},
+            "path": {"type": "string", "description": "相对仓库根的文件路径，须在计划清单内"},
+            "old_text": {"type": "string", "description": "要被替换的原文本，须在文件里唯一出现"},
+            "new_text": {"type": "string", "description": "替换后的新文本"},
+        },
+        "required": ["plan_id", "path", "old_text", "new_text"],
+    },
+    group=GROUP, effect=effects.WRITE_LOCAL,
+)
+def patch_open_file(plan_id: str, path: str, old_text: str, new_text: str) -> str:
+    ok, msg = engineering.patch_file(plan_id, path, old_text, new_text)
+    return msg
+
+
+@tool(
+    "append_to_file",
+    "向一个文件追加一段内容——用于分片构建体量较大的新文件：不需要一次生成全文，"
+    "按段多次调用，每次只吐这一段，自然拼成完整文件。文件不存在时第一次调用等价"
+    "于新建，已存在则接着往后加。写完会对 .py 文件做一次语法自检，结果附在返回"
+    "文本里（只有全部段落追加完、文件语法完整时才会通过）。",
+    {
+        "type": "object",
+        "properties": {
+            "plan_id": {"type": "string"},
+            "path": {"type": "string", "description": "相对仓库根的文件路径，须在计划清单内"},
+            "content": {"type": "string", "description": "要追加的这一段内容"},
+        },
+        "required": ["plan_id", "path", "content"],
+    },
+    group=GROUP, effect=effects.WRITE_LOCAL,
+)
+def append_to_file(plan_id: str, path: str, content: str) -> str:
+    ok, msg = engineering.append_file(plan_id, path, content)
     return msg
 
 

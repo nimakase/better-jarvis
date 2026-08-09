@@ -64,7 +64,7 @@ def build_repo():
 
 def cls_open(path):
     rel = Path(path).as_posix()
-    if rel in ("foo.py", "bar.py", "newfile.py"):
+    if rel in ("foo.py", "bar.py", "newfile.py", "dup.py", "ghost.py", "big.py", "existing.py"):
         return ("open", "biz")
     return ("protected", "core")
 
@@ -229,8 +229,21 @@ check("7 finalize=WRITE_LOCAL", _effects.effect_of("finalize_engineering_change"
 check("7 abandon=WRITE_LOCAL", _effects.effect_of("abandon_engineering_change") == _effects.WRITE_LOCAL)
 
 NAMES = {"propose_engineering_change", "execute_engineering_change", "write_open_file",
+         "patch_open_file", "append_to_file",
          "run_repo_test", "finalize_engineering_change", "abandon_engineering_change"}
-check("7 全部六个在BACKGROUND_BLOCKED_TOOLS", NAMES <= _controller.BACKGROUND_BLOCKED_TOOLS)
+ALWAYS_BACKGROUND_BLOCKED = {"propose_engineering_change", "execute_engineering_change",
+                             "finalize_engineering_change", "abandon_engineering_change"}
+check("7 开范围/确认闸/提交/作废 四个始终后台屏蔽",
+      ALWAYS_BACKGROUND_BLOCKED <= _controller.BACKGROUND_BLOCKED_TOOLS)
+check("7 write/patch/append 不在硬屏蔽名单(改走计划范围条件放行)",
+      not ({"write_open_file", "patch_open_file", "append_to_file"} & _controller.BACKGROUND_BLOCKED_TOOLS))
+check("7 write/patch/append 在 PLAN_SCOPED_WRITE_TOOLS",
+      {"write_open_file", "patch_open_file", "append_to_file"} <= _controller.PLAN_SCOPED_WRITE_TOOLS)
+check("7 run_repo_test 只读,不在后台屏蔽名单",
+      "run_repo_test" not in _controller.BACKGROUND_BLOCKED_TOOLS)
+
+check("7 patch_open_file=WRITE_LOCAL", _effects.effect_of("patch_open_file") == _effects.WRITE_LOCAL)
+check("7 append_to_file=WRITE_LOCAL", _effects.effect_of("append_to_file") == _effects.WRITE_LOCAL)
 
 check("7 core/engineering.py是PROTECTED", _self_model.classify("core/engineering.py")[0] == "protected")
 check("7 connectors/engineering_tools.py是PROTECTED",
@@ -247,6 +260,117 @@ check("7 execute首次调用被ConfirmGate拦下", not ok)
 g.new_user_turn()
 ok2, _ = g.check("execute_engineering_change", '{"plan_id":"abc12345"}')
 check("7 用户确认后同参数放行", ok2)
+
+# ── 8. patch_file：精确替换 / 唯一性校验 / 未确认拒写 / 语法自检 ────────────────
+print("[8] patch_file")
+d = build_repo()
+eng = mk(d)
+plan = eng.propose("补丁测试", ["foo.py"])
+ok, msg = eng.patch_file(plan.plan_id, "foo.py", "return 1", "return 9")
+check("8 未确认时拒写", not ok and "尚未经过确认执行" in msg)
+eng.confirm(plan.plan_id)
+
+ok, msg = eng.patch_file(plan.plan_id, "foo.py", "不存在的旧文本", "x")
+check("8 old_text 找不到时拒绝", not ok and "没找到" in msg)
+
+ok, msg = eng.patch_file(plan.plan_id, "foo.py", "return 1", "return 9")
+check("8 精确替换成功", ok and "return 9" in (d / "foo.py").read_text())
+check("8 快照捕获原内容", plan.files["foo.py"].backup == "def value(): return 1\n")
+
+# old_text 出现多次 → 拒绝（唯一性）
+(d / "dup.py").write_text("a = 1\na = 1\n")
+plan2 = eng.propose("重复文本测试", ["dup.py"])
+eng.confirm(plan2.plan_id)
+ok, msg = eng.patch_file(plan2.plan_id, "dup.py", "a = 1", "a = 2")
+check("8 old_text 不唯一时拒绝", not ok and "位置不唯一" in msg)
+
+# 文件不存在 → 拒绝，提示改用 write/append
+plan3 = eng.propose("新文件补丁测试", ["ghost.py"])
+eng.confirm(plan3.plan_id)
+ok, msg = eng.patch_file(plan3.plan_id, "ghost.py", "x", "y")
+check("8 文件不存在时拒绝并提示替代方案",
+      not ok and "尚不存在" in msg and "write_open_file" in msg)
+
+# 语法自检：写入有语法错误的内容会在返回消息里给警告，但仍然落盘（自检不阻断）
+# 用一份全新仓库，避免依赖上面几步对 foo.py 的历史改动状态。
+d5 = build_repo()
+eng5 = mk(d5)
+plan4 = eng5.propose("语法自检测试", ["foo.py"])
+eng5.confirm(plan4.plan_id)
+ok, msg = eng5.patch_file(plan4.plan_id, "foo.py", "return 1", "return (")
+check("8 语法错误仍写入成功", ok)
+check("8 语法错误返回警告", "语法自检未通过" in msg)
+
+# ── 9. append_file：分片构建新文件 / 续写已存在文件 ─────────────────────────────
+print("[9] append_file")
+d = build_repo()
+eng = mk(d)
+plan = eng.propose("分片写测试", ["big.py"])
+eng.confirm(plan.plan_id)
+ok, msg = eng.append_file(plan.plan_id, "big.py", "def a():\n    return 1\n\n\n")
+check("9 首次追加=新建", ok and (d / "big.py").exists())
+check("9 首次追加内容正确", (d / "big.py").read_text() == "def a():\n    return 1\n\n\n")
+
+ok, msg = eng.append_file(plan.plan_id, "big.py", "def b():\n    return 2\n")
+check("9 二次追加拼接成功", ok)
+check("9 拼接后内容完整",
+      (d / "big.py").read_text() == "def a():\n    return 1\n\n\ndef b():\n    return 2\n")
+check("9 快照记录的是追加前(不存在)状态", plan.files["big.py"].existed is False)
+
+# 续写一个计划开始前就已存在的文件：第一次调用是"接着写"，不是清空重来
+d2 = build_repo()
+(d2 / "existing.py").write_text("x = 1\n")
+eng2 = mk(d2)
+plan2 = eng2.propose("续写已有文件", ["existing.py"])
+eng2.confirm(plan2.plan_id)
+ok, msg = eng2.append_file(plan2.plan_id, "existing.py", "y = 2\n")
+check("9 续写已有文件是追加不是覆盖",
+      (d2 / "existing.py").read_text() == "x = 1\ny = 2\n")
+
+# ── 10. steps：登记/渲染/写完自动 mark done ─────────────────────────────────────
+print("[10] steps 步骤拆分")
+d = build_repo()
+eng = mk(d)
+plan = eng.propose("多步骤计划", ["foo.py", "bar.py"], steps=[
+    {"description": "先改 foo", "files": ["foo.py"]},
+    {"description": "再改 bar", "files": ["bar.py"]},
+])
+check("10 步骤登记数量正确", len(plan.steps) == 2)
+rendered = eng.render_plan(plan)
+check("10 渲染里含步骤描述", "先改 foo" in rendered and "再改 bar" in rendered)
+eng.confirm(plan.plan_id)
+eng.write_file(plan.plan_id, "foo.py", "def value(): return 2\n")
+check("10 步骤1写完后标记done", plan.steps[0].status == "done")
+check("10 步骤2未写不标记done", plan.steps[1].status == "pending")
+eng.write_file(plan.plan_id, "bar.py", "x = 1\n")
+check("10 步骤2写完后也标记done", plan.steps[1].status == "done")
+rendered2 = eng.render_plan(plan)
+check("10 渲染里 done 步骤打勾", rendered2.count("✓ 步骤") == 2)
+
+# ── 11. is_confirmed：确认模型重设依赖的判定函数 ────────────────────────────────
+print("[11] is_confirmed")
+d = build_repo()
+eng = mk(d)
+plan = eng.propose("确认判定测试", ["foo.py"])
+check("11 未确认时is_confirmed=False", eng.is_confirmed(plan.plan_id) is False)
+eng.confirm(plan.plan_id)
+check("11 confirm后is_confirmed=True", eng.is_confirmed(plan.plan_id) is True)
+eng.write_file(plan.plan_id, "foo.py", "def value(): return 2\n")
+check("11 executing状态下is_confirmed仍True", eng.is_confirmed(plan.plan_id) is True)
+check("11 不存在的plan_id=False", eng.is_confirmed("不存在") is False)
+
+d2 = build_repo()
+eng2 = mk(d2)
+plan2 = eng2.propose("applied后测试", ["foo.py", "tests/test_auto_foo.py"])
+eng2.confirm(plan2.plan_id)
+eng2.write_file(plan2.plan_id, "foo.py", "def value(): return 2\n")
+eng2.write_file(plan2.plan_id, "tests/test_auto_foo.py", AUTO_FOO_TEST)
+(d2 / "tests" / "test_keystone.py").write_text(
+    "import sys\nfrom pathlib import Path\n"
+    "sys.path.insert(0, str(Path(__file__).resolve().parent.parent))\n"
+    "import foo\nsys.exit(0 if foo.value() == 2 else 1)\n")
+eng2.finalize(plan2.plan_id)
+check("11 applied后is_confirmed=False(收尾窗口已关)", eng2.is_confirmed(plan2.plan_id) is False)
 
 # ── 收尾 ──────────────────────────────────────────────────────────────────────
 print()
