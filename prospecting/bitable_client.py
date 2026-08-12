@@ -1,6 +1,7 @@
 """prospecting/bitable_client.py — 飞书多维表格「客户循环驾驶舱」读写客户端。
 
-用 lark-oapi。凭据取 config.FEISHU_APP_ID/SECRET;Base/表取环境变量(或 config):
+用 lark-oapi。凭据取 config.FEISHU_APP_ID/SECRET;Base/表取环境变量(或 prospecting.settings,
+  2026-08-12 起从 config 迁出,见该模块 docstring):
   BITABLE_APP_TOKEN / BITABLE_TABLE_ID(见 scripts.bitable_bootstrap 建表后打印)。
 
 分工(见 docs/客户循环-view管理重设计.md §12/13):
@@ -23,14 +24,18 @@ def _norm(s) -> str:
 
 
 def _cfg() -> tuple:
-    """(app_token, table_id):优先环境变量,回退 config 同名属性。"""
+    """(app_token, table_id):优先环境变量,回退 prospecting.settings 同名属性。
+
+    2026-08-12:回退目标从 config.BITABLE_APP_TOKEN/TABLE_ID 迁到 prospecting.settings
+    (诊断见项目记忆 jarvis-architecture-migration-plan ②),.env 变量名不变。
+    """
     at = os.environ.get("BITABLE_APP_TOKEN")
     tid = os.environ.get("BITABLE_TABLE_ID")
     if not (at and tid):
         try:
-            import config
-            at = at or getattr(config, "BITABLE_APP_TOKEN", None)
-            tid = tid or getattr(config, "BITABLE_TABLE_ID", None)
+            from prospecting import settings as cl_settings
+            at = at or getattr(cl_settings, "BITABLE_APP_TOKEN", None)
+            tid = tid or getattr(cl_settings, "BITABLE_TABLE_ID", None)
         except Exception:
             pass
     return at, tid

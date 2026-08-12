@@ -35,14 +35,18 @@ from core import workflow_registry as wr
 
 
 # Ned 的「全字段视图」(portal 9311334)。env JARVIS_GRADE_VIEW_URL 可覆盖。
-DEFAULT_VIEW_URL = "https://app.hubspot.com/contacts/9311334/objects/0-2/views/68742792/list"
+# 2026-08-11:换成新建的 view 69611232(去掉了 Priority 列,加了 Account Owner
+# 供潜客工作流未来合并停靠点用;旧 view 68742792 停用,不再维护)。
+DEFAULT_VIEW_URL = "https://app.hubspot.com/contacts/9311334/objects/0-2/views/69611232/list"
 
 
 def _apply_enabled() -> bool:
-    # 优先读 config(pydantic 从 .env 读进 settings,不进 os.environ);os.environ 兜底(shell export)。
+    # 优先读 prospecting.settings(pydantic 从 .env 读进 settings,不进 os.environ);
+    # os.environ 兜底(shell export)。2026-08-12:从 config.CUSTOMER_LOOP_APPLY 迁到这里
+    # (诊断见项目记忆 jarvis-architecture-migration-plan ②),.env 变量名不变。
     try:
-        import config
-        if config.CUSTOMER_LOOP_APPLY:
+        from prospecting import settings as cl_settings
+        if cl_settings.CUSTOMER_LOOP_APPLY:
             return True
     except Exception:
         pass
@@ -50,10 +54,11 @@ def _apply_enabled() -> bool:
 
 
 def _view_url() -> str:
+    # 2026-08-12:从 config.GRADE_VIEW_URL 迁到 prospecting.settings(同上)。
     try:
-        import config
-        if config.GRADE_VIEW_URL:
-            return config.GRADE_VIEW_URL
+        from prospecting import settings as cl_settings
+        if cl_settings.GRADE_VIEW_URL:
+            return cl_settings.GRADE_VIEW_URL
     except Exception:
         pass
     return os.environ.get("JARVIS_GRADE_VIEW_URL", "").strip() or DEFAULT_VIEW_URL

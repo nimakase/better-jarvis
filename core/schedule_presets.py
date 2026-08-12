@@ -29,6 +29,22 @@ PRESETS: dict[str, dict] = {
         "default_cron": "0 8 * * *",   # 每天 08:00
         "prompt": "请运行 signal_collection 工作流，采集今日市场信号并入库。",
     },
+    "customer_loop_nightly": {
+        "name": "customer_loop_nightly",
+        "title": "客户循环·夜间",
+        "description": "夜里整理 HubSpot 客户：首跑应用冷启动对账,之后增量维护 priority + "
+                       "回复分类出提议。写入受 JARVIS_CUSTOMER_LOOP_APPLY 开关(默认只读)。产出经飞书交付。",
+        "default_cron": "0 1 * * *",   # 每天凌晨 01:00(Asia/Shanghai)
+        "prompt": "请运行 customer_loop_nightly 工作流，跑客户循环夜间作业。",
+    },
+    "procedural_consolidation": {
+        "name": "procedural_consolidation",
+        "title": "过程记忆巩固",
+        "description": "复盘近期 self_review 复盘文档/对话/监督信号，把「怎么解决问题」的经验"
+                       "提炼进过程记忆库，下次卡壳可用 recall_procedure 直接查到复用（2026-08-12 步骤③）。",
+        "default_cron": "0 3 * * 1",   # 每周一凌晨 03:00(Asia/Shanghai)
+        "prompt": "请运行 run_procedural_consolidation 工具，跑一轮过程记忆巩固，并把结果摘要发我。",
+    },
 }
 
 _REQUIRED = ("name", "title", "description", "default_cron", "prompt")

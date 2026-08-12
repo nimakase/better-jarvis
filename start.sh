@@ -1,4 +1,9 @@
 #!/bin/bash
+# 一键启动贾维斯——不用再手动 source .venv/bin/activate。
+# 没有虚拟环境会自动建、没装依赖会自动装，直接跑这一个脚本就够了。
+set -e
+cd "$(dirname "$0")"
+
 echo "启动贾维斯..."
 
 # 检查 .env
@@ -9,15 +14,20 @@ if [ ! -f .env ]; then
     exit 1
 fi
 
+# 虚拟环境：没有就建（此后每次直接用 .venv/bin/python，不需要手动 activate）
+VENV_DIR=".venv"
+if [ ! -x "$VENV_DIR/bin/python" ]; then
+    echo "未找到虚拟环境，正在创建..."
+    python3 -m venv "$VENV_DIR"
+fi
+PY="$VENV_DIR/bin/python"
+
 # 安装依赖（首次运行；用项目实际依赖 openai 做探测，装过就跳过）
-if ! python -c "import openai" 2>/dev/null; then
+if ! "$PY" -c "import openai" 2>/dev/null; then
     echo "安装依赖..."
-    pip install -r requirements.txt
+    "$PY" -m pip install -r requirements.txt
 fi
 
-# 启动并打开浏览器
+# 启动
 echo "服务启动中，请在浏览器打开 http://localhost:8000"
-if command -v open &>/dev/null; then
-    sleep 1 && open http://localhost:8000 &
-fi
-python main.py
+exec "$PY" main.py

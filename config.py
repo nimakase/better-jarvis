@@ -63,9 +63,6 @@ class Settings(BaseSettings):
     # 默认关：需在真实飞书环境联调验证后再开；开启后任一步失败会自动降级回
     # 「占位卡 + patch 整卡」的既有稳定流式（见 lark_bridge._stream_open）。
     feishu_native_streaming: bool = False
-    # 客户循环「驾驶舱」多维表格(Bitable)标识:scripts.bitable_bootstrap 建表后写进 .env。
-    bitable_app_token: str = ""
-    bitable_table_id: str = ""
 
     # 模型（OpenRouter 格式 provider/model-name；:online 启用内置联网）
     claude_model: str = "deepseek/deepseek-v4-flash:online"
@@ -114,6 +111,12 @@ class Settings(BaseSettings):
     # 其余按领域按需加载——工具层重构后（29 工具 / 9 个清晰分组）小模型路由更准。
     # 如需回到"每轮全量暴露"的旧行为，设 JARVIS_PROGRESSIVE_TOOLS=0。
     progressive_tools: bool = Field(default=True, validation_alias="JARVIS_PROGRESSIVE_TOOLS")
+    # 权限闸（⑤二期，core/grants.check_tool）：工具所在模块必须已被人工审批覆盖
+    # 当前代码才允许执行。默认【开启】——Ned 已用 audit_permission_grants /
+    # approve_permission_grant 走完首轮审批（2026-08-12）。应急开关：
+    # 若审批数据库损坏、或新增模块来不及批准导致误伤生产工具，设
+    # JARVIS_PERMISSION_ENFORCEMENT=0 整体关闭本闸（回退到⑤一期：只审计不拦截）。
+    permission_enforcement: bool = Field(default=True, validation_alias="JARVIS_PERMISSION_ENFORCEMENT")
     # 常驻核心工具（仅在渐进披露开启时有意义；按工具名常驻、与组无关）。
     # 选取标准：任意对话里都可能随时需要的跨域工具——发文件、记长期事实、读文件、
     # 查两个保险箱（"我有哪些证件/保单"）。其余领域工具靠 load_tools 按需加载。
@@ -146,10 +149,6 @@ class Settings(BaseSettings):
     anysearch_base_url: str = Field(default="https://api.anysearch.com/v1/search",
                                     validation_alias="ANYSEARCH_BASE_URL")
     anysearch_daily_cap: int = Field(default=900, validation_alias="ANYSEARCH_DAILY_CAP")
-
-    # 客户循环夜间作业:apply=真写(默认 False=只读 dry-run);grade_view_url 覆盖全字段视图。
-    customer_loop_apply: bool = Field(default=False, validation_alias="JARVIS_CUSTOMER_LOOP_APPLY")
-    grade_view_url: str = Field(default="", validation_alias="JARVIS_GRADE_VIEW_URL")
 
 
 settings = Settings()
@@ -192,12 +191,10 @@ EXA_DAILY_CAP = settings.exa_daily_cap
 FEISHU_APP_ID       = settings.feishu_app_id
 FEISHU_APP_SECRET   = settings.feishu_app_secret
 
-CUSTOMER_LOOP_APPLY = settings.customer_loop_apply
-GRADE_VIEW_URL      = settings.grade_view_url
 FEISHU_PUSH_OPEN_ID = settings.feishu_push_open_id
 FEISHU_NATIVE_STREAMING = settings.feishu_native_streaming
-BITABLE_APP_TOKEN   = settings.bitable_app_token
-BITABLE_TABLE_ID    = settings.bitable_table_id
+# customer_loop/bitable 相关设置已迁到 prospecting/settings.py(2026-08-12,
+# 诊断见项目记忆 jarvis-architecture-migration-plan ②)。
 
 MAX_HISTORY_TURNS         = settings.max_history_turns
 MAX_TOKENS_RESPONSE       = settings.max_tokens_response
@@ -250,6 +247,7 @@ _export_env_for_skills()
 
 # 渐进披露（默认开）
 PROGRESSIVE_TOOLS = settings.progressive_tools
+PERMISSION_ENFORCEMENT = settings.permission_enforcement
 CORE_TOOL_NAMES   = tuple(
     n.strip() for n in settings.core_tool_names.split(",") if n.strip()
 )

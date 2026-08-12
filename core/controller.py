@@ -43,6 +43,7 @@ import time as _time
 
 import config
 from core import effects as _effects
+from core import grants as _grants
 from core import profile
 from core import group_memory as _group_memory
 from core import model_capabilities as _model_capabilities
@@ -838,6 +839,21 @@ class JarvisController:
                         "content": block_msg,
                     })
                     continue
+
+                # 权限闸（⑤二期，core/grants.check_tool）：工具所在模块的当前代码
+                # 必须已被人工审批覆盖，否则拒绝执行——机械拦截，逻辑全在 grants 模块，
+                # 这里只是十几行胶水（与上面 confirm_gate/taint 同一套模式）。
+                # JARVIS_PERMISSION_ENFORCEMENT=0 可整体关闭（应急开关）。
+                if config.PERMISSION_ENFORCEMENT:
+                    allowed, block_msg = _grants.check_tool(tc["name"])
+                    if not allowed:
+                        yield {"type": "tool", "name": f"{tc['name']}（权限闸拦截）"}
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": block_msg,
+                        })
+                        continue
 
                 yield {"type": "tool", "name": tc["name"]}
                 result = await _execute_tool(

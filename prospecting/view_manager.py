@@ -4,16 +4,30 @@
 run() 把真依赖(breeze_outreach + view_writer)接上,驱动浏览器。
 
 数据流见 docs/客户循环-view管理重设计.md §3。
+
+2026-08-12:run_view_cycle 的 prospecting/core 两个批处理循环改为调用 core.batch.run_batch
+(断点续跑/单条容错/limit 三件套不再手写)——诊断见项目记忆 [[jarvis-architecture-migration-plan]]。
+行为上有一处刻意的小改动:失败条目的 error 字符串从旧格式(硬异常只留类型名、软错误只留原始
+消息两种不一致的格式)统一成 run_batch 的 "TypeName: message" 格式——硬异常此前直接丢弃了
+异常消息本身,现在保留,信息量更大而不是更小;没有任何下游代码解析这个字符串的具体内容
+(customer_loop_tools._render_cycle_notification 只读 len(errors)),改动是安全的。
 """
 from __future__ import annotations
 
 from typing import Callable, Optional
 
+from core import batch
 from prospecting import outreach_store
 from prospecting import outreach_state
 from prospecting import account_grading as grading
 from prospecting import reply_router
 from prospecting.outreach_state import account_outreach_state
+
+
+class _SoftBreezeError(Exception):
+    """Breeze/HubSpot 返回携带的"软错误"(消歧/缺名/读取不完整)——业务上不是真异常,
+    只是借 core.batch.run_batch 统一的单条容错通道走一遍,不必在 worker 函数内部
+    再手写一套 if error: append+continue。"""
 
 
 def compute_segments(accounts: list,
@@ -162,6 +176,10 @@ def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = 
     grade_view_url:全字段源 view(含 Account type/deals/日期/**Company domain name** 列 + 全部账户);
       默认取 connectors.customer_loop_tools._view_url()。段 view 只有名字列,不能拿来读。
 
+    断点续跑/单条容错/limit 三件套委托给 core.batch.run_batch(2026-08-12 起,此前在本函数内手写)——
+    Prospecting/Core 两个循环各自把"处理一个账户"包成一个 worker 函数,run_batch 负责过滤已完成
+    (done_keys)、按 limit 分批、单账户异常不拖垮整批。
+
     ⚠ 依赖 Breeze/名单法/LLM(均已实盘校准)。Bitable 驾驶舱 + 建 Task 留后续批次。
     """
     from prospecting import account_reader as reader, breeze_outreach, view_writer, reply_classify
@@ -187,14 +205,10 @@ def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = 
     nameless = nameless_accounts(records)                       # 导入缺名:剔除 + 单独上报
     prospecting, core = split_accounts(records)
 
-    # 断点续跑:跳过 store 里已算过的(崩了/分批重跑接着来,不重复问 Breeze)。limit 限每类数量(分批)。
+    # 断点续跑:跳过 store 里已算过的(崩了/分批重跑接着来,不重复问 Breeze)。委托给 run_batch。
     done = set(outreach_store.all_states().keys()) if resume else set()
-    pros_todo = [a for a in prospecting if outreach_store._norm(a) not in done]
-    core_todo = [c for c in core if outreach_store._norm(c["name"]) not in done]
-    if limit:
-        pros_todo, core_todo = pros_todo[:limit], core_todo[:limit]
 
-    errors, proposals, bitable_rows = [], [], []
+    errors, proposals, bitable_rows, core_due = [], [], [], []
 
     # 驾驶舱:读回 Ned 手写的处置(list质量喂 core_tier;处置留作信号)。没配 Bitable / 读失败 → 空,不阻塞。
     disp = {}
@@ -233,61 +247,72 @@ def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = 
                                             "summary": v.get("summary"), "note": note})
 
     # ── Prospecting:Breeze 抽 outreach(带 domain 消歧)→ 状态机 → 回复交 reply_classify 定局 ──
-    for acct in pros_todo:
-        try:                                                    # 单户抖动不拖垮整轮
-            rec = by_name.get(acct, {})
-            site = rec.get("company_domain")
-            r = breeze_outreach.ask_breeze(browser, acct, website=site, logger=logger)
-            if r.get("error"):                                  # 不完整/消歧/缺名 → 跳过,别误标 not_started
-                errors.append({"account": acct, "error": r["error"]})
-                continue
-            contacts = r.get("contacts", [])
-            decay = outreach_state.derive_decay_stage(rec.get("last_activity_date"), today=today)
-            st = account_outreach_state(contacts, decay_stage=decay, today=today)
-            if st.get("state") == "reply_pending":              # 检测到 inbound → reply_classify 判真假
-                verdict = reply_classify.classify(browser.page, acct, logger=logger, website=site)
-                st = account_outreach_state(contacts, decay_stage=decay,
-                                            reply_is_real=verdict is not None, today=today)
-                if verdict:                                     # 真回复 → 出路由提议(待确认,不自动写)
-                    prop = reply_router.route(verdict.get("category"),
-                                              stock_wake_days=verdict.get("stock_wake_days"), account_name=acct)
-                    proposals.append({"account": acct, "proposal": prop,
-                                      "reply_date": verdict.get("reply_date"), "summary": verdict.get("summary")})
-            outreach_store.upsert_account_state(acct, st)
-            bitable_rows.append(_bitable_row(acct, st))
-        except Exception as e:
-            errors.append({"account": acct, "error": f"exc:{type(e).__name__}"})
-            if logger:
-                logger.warning("prospecting %s 异常跳过:%s", acct, e)
-            continue
+    def _prospecting_worker(acct: str) -> dict:
+        rec = by_name.get(acct, {})
+        site = rec.get("company_domain")
+        r = breeze_outreach.ask_breeze(browser, acct, website=site, logger=logger)
+        if r.get("error"):                                      # 不完整/消歧/缺名 → 跳过,别误标 not_started
+            raise _SoftBreezeError(r["error"])
+        contacts = r.get("contacts", [])
+        decay = outreach_state.derive_decay_stage(rec.get("last_activity_date"), today=today)
+        st = account_outreach_state(contacts, decay_stage=decay, today=today)
+        if st.get("state") == "reply_pending":                  # 检测到 inbound → reply_classify 判真假
+            verdict = reply_classify.classify(browser.page, acct, logger=logger, website=site)
+            st = account_outreach_state(contacts, decay_stage=decay,
+                                        reply_is_real=verdict is not None, today=today)
+            if verdict:                                         # 真回复 → 出路由提议(待确认,不自动写)
+                prop = reply_router.route(verdict.get("category"),
+                                          stock_wake_days=verdict.get("stock_wake_days"), account_name=acct)
+                proposals.append({"account": acct, "proposal": prop,
+                                  "reply_date": verdict.get("reply_date"), "summary": verdict.get("summary")})
+        outreach_store.upsert_account_state(acct, st)
+        bitable_rows.append(_bitable_row(acct, st))
+        return st
+
+    pros_by_key = {outreach_store._norm(a): a for a in prospecting}
+    pros_result = batch.run_batch(
+        prospecting, key_fn=outreach_store._norm, worker_fn=_prospecting_worker,
+        done_keys=done, limit=limit, logger=logger,
+        snapshot_fn=lambda acct, exc: {"account": acct, "hubspot_row": by_name.get(acct, {})},
+    )
+    for item_err in pros_result.failed:
+        acct = pros_by_key.get(item_err.key, item_err.key)
+        errors.append({"account": acct, "error": item_err.error})
+        if logger:
+            logger.warning("prospecting %s 异常跳过:%s", acct, item_err.error)
 
     # ── Core:Breeze 数 deal(HubSpot 无赢单列)→ core_tier(won→T0/T1;list质量取 Ned 手写)→ 判维护 ──
-    core_due = []
-    for c in core_todo:
+    def _core_worker(c: dict) -> dict:
         name = c["name"]
-        try:                                                    # 单户抖动不拖垮整轮
-            rec = by_name.get(name, {})
-            ds = breeze_outreach.ask_deal_summary(browser, name, website=rec.get("company_domain"), logger=logger)
-            if ds.get("error"):                                 # 不完整/消歧 → 跳过,别拿残缺数据算错 tier
-                errors.append({"account": name, "error": ds["error"]})
-                continue
-            won = (ds.get("parsed") or {}).get("won", 0)
-            openn = rec.get("num_open_deals") or (ds.get("parsed") or {}).get("open", 0)
-            lq = (disp.get(outreach_store._norm(name)) or {}).get("list质量")   # Ned 手写的 list 质量
-            tier = grading.core_tier(won, open_deals=openn, list_quality=lq)
-            due = outreach_state.core_maintenance_due(
-                c.get("last_activity"), tier=tier if tier in ("T0", "T1", "T2") else None, today=today)
-            st_core = {"state": "core", "tier": tier, "won": won, "maintain_due": due,
-                       "view": MAINTAIN_VIEW if due else None}  # 只有到点的进"维护到点"view
-            outreach_store.upsert_account_state(name, st_core)
-            bitable_rows.append(_bitable_row(name, st_core))
-            if due:
-                core_due.append(name)
-        except Exception as e:
-            errors.append({"account": name, "error": f"exc:{type(e).__name__}"})
-            if logger:
-                logger.warning("core %s 异常跳过:%s", name, e)
-            continue
+        rec = by_name.get(name, {})
+        ds = breeze_outreach.ask_deal_summary(browser, name, website=rec.get("company_domain"), logger=logger)
+        if ds.get("error"):                                     # 不完整/消歧 → 跳过,别拿残缺数据算错 tier
+            raise _SoftBreezeError(ds["error"])
+        won = (ds.get("parsed") or {}).get("won", 0)
+        openn = rec.get("num_open_deals") or (ds.get("parsed") or {}).get("open", 0)
+        lq = (disp.get(outreach_store._norm(name)) or {}).get("list质量")   # Ned 手写的 list 质量
+        tier = grading.core_tier(won, open_deals=openn, list_quality=lq)
+        due = outreach_state.core_maintenance_due(
+            c.get("last_activity"), tier=tier if tier in ("T0", "T1", "T2") else None, today=today)
+        st_core = {"state": "core", "tier": tier, "won": won, "maintain_due": due,
+                   "view": MAINTAIN_VIEW if due else None}  # 只有到点的进"维护到点"view
+        outreach_store.upsert_account_state(name, st_core)
+        bitable_rows.append(_bitable_row(name, st_core))
+        if due:
+            core_due.append(name)
+        return st_core
+
+    core_by_key = {outreach_store._norm(c["name"]): c["name"] for c in core}
+    core_result = batch.run_batch(
+        core, key_fn=lambda c: outreach_store._norm(c["name"]), worker_fn=_core_worker,
+        done_keys=done, limit=limit, logger=logger,
+        snapshot_fn=lambda c, exc: {"account": c.get("name"), "hubspot_row": by_name.get(c.get("name"), {})},
+    )
+    for item_err in core_result.failed:
+        name = core_by_key.get(item_err.key, item_err.key)
+        errors.append({"account": name, "error": item_err.error})
+        if logger:
+            logger.warning("core %s 异常跳过:%s", name, item_err.error)
 
     if proposals:
         cls.save_proposals(proposals)                          # 回复提议进待确认库(不自动写)
@@ -308,11 +333,19 @@ def run_view_cycle(browser, view_url_map: dict, grade_view_url: Optional[str] = 
     def _write(url, names, ap):
         return view_writer.set_view_membership(browser, url, names, apply=ap, logger=logger)
     cumulative = outreach_store.accounts_by_view()
+    # 补空段:accounts_by_view() 只对"当前有账户"的段给 key,配了 URL 但这轮算出
+    # 是空的段(常见于"已回复"/"维护到点")不会出现在 cumulative 里,导致 apply_segments
+    # 直接跳过、不去清空 —— 那个 view 上若还挂着旧名单(如 v1→v2 切换时复用 view ID
+    # 留下的残留)就会一直留着。这里显式给 view_url_map 里所有段补 [] 默认值,
+    # 保证每个配置了 URL 的段每轮都会被写(空则清空),名单法真正做到"整表替换"。
+    for _view_name in view_url_map:
+        cumulative.setdefault(_view_name, [])
     applied = apply_segments(cumulative, lambda v: view_url_map.get(v), _write, apply=apply)
 
     return {
         "prospecting_total": len(prospecting), "core_total": len(core),
-        "processed_prospecting": len(pros_todo), "processed_core": len(core_todo),
+        "processed_prospecting": pros_result.processed_count,
+        "processed_core": core_result.processed_count,
         "reply_proposals": len(proposals), "core_due": len(core_due),
         "nameless_count": len(nameless), "breeze_errors": errors,
         "core_no_deal_fyi": core_no_deal_fyi,   # Type=Core 但没 deal 且你没批注 → 确认要保护?
