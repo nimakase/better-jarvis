@@ -187,7 +187,25 @@ def append_to_file(plan_id: str, path: str, content: str) -> str:
 def run_repo_test(path: str = "tests/run_all.py") -> str:
     ok, out = engineering.run_script(path or "tests/run_all.py")
     status = "✅ 通过" if ok else "✖ 未通过"
-    return f"{status}\n{out[-2000:]}"
+    if ok:
+        return f"{status}\n{out[-2000:]}"
+    # 失败时：不能只靠"失败摘要恰好落在最后2000字符里"这种运气——run_all.py
+    # 聚合多个测试文件的输出很容易远超这个窗口，把关键的"谁失败了"埋没在中间。
+    # 改为主动从完整输出里挑出失败行（❌/✗ 开头），摘要单独放在最前面，
+    # 后面再跟一段尾部原文作为上下文（2026-08-13：修复贾维斯自己被这个盲区
+    # 卡住近30轮工具调用才摸清失败清单的问题，见项目记忆）。
+    fail_lines = [ln for ln in out.splitlines() if ln.strip().startswith(("❌", "✗"))]
+    parts = [status]
+    if fail_lines:
+        parts.append("── 失败摘要（从完整输出中提取，不依赖截断位置）──")
+        parts.append("\n".join(fail_lines[-40:]))
+        parts.append("── 完整输出尾部（最后1500字符，供进一步排查）──")
+        parts.append(out[-1500:])
+    else:
+        # 没有匹配到已知失败标记格式（比如脚本直接崩溃/异常退出）——退回原始尾部，
+        # 但给足窗口，别再让最后一点线索被截没。
+        parts.append(out[-3000:])
+    return "\n".join(parts)
 
 
 @tool(

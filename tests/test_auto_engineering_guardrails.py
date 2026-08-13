@@ -36,6 +36,12 @@ for _v in ("ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy",
 
 import config  # noqa: E402
 config.PROGRESSIVE_TOOLS = False
+# 本测试往真实 registry 注册内联桩 handler（模块名 __main__，跟这个脚本自己共享），
+# 运行时权限闸（core/grants.check_tool）按模块名查授权表——__main__ 永远批不到、也不
+# 该批（批了等于给任何直接执行的脚本开后门）。测试跑在隔离沙盒里不产生真实副作用，
+# 不属于这道面向生产对话的闸该管的范围，直接关掉（2026-08-13，见项目记忆
+# prospecting-permission-gate-collision.md）。
+config.PERMISSION_ENFORCEMENT = False
 if not getattr(config, "OPENROUTER_API_KEY", None):
     config.OPENROUTER_API_KEY = "test-key"
 

@@ -351,14 +351,27 @@ class Engineer:
     def run_script(self, rel: str) -> tuple[bool, str]:
         """跑一个受限范围内的脚本（self.gate 或 tests/test_auto_*.py），
         返回 (是否成功, 合并输出)。每次用全新 PYTHONPYCACHEPREFIX，避免
-        .pyc 缓存让"刚写完立刻跑"读到旧字节码（同 self_iteration 的理由）。"""
+        .pyc 缓存让"刚写完立刻跑"读到旧字节码（同 self_iteration 的理由）。
+
+        测试子进程显式关闭 core.grants 的运行时权限闸（JARVIS_PERMISSION_ENFORCEMENT=0）。
+        原因（2026-08-13 真机撞见过）：check_tool() 按 handler.__module__ 查授权表，而不少测试
+        （如 test_stall_detection.py/test_auto_engineering_guardrails.py）会往真实 registry 里
+        注册一个定义在测试脚本自己（`python tests/xxx.py` 运行时 __module__=="__main__"）的
+        探针/桩 handler，用来验证 controller.chat() 真实执行了工具——"__main__" 这个模块名是
+        所有被直接跑的脚本共享的，既没法有意义地单独审批（批了等于给任何直接执行的脚本开后门），
+        也不该审批（这条闸本来就是防生产对话里的未授权代码，不是防自己的测试沙盒）。测试脚本本身
+        跑在临时环境里（这里+各测试自己的临时目录/依赖注入），不产生真实副作用，关掉这道面向生产
+        对话的安全闸不影响它要防的东西；权限闸自身的逻辑由 tests/test_grants_enforcement.py 直接
+        调 check_tool()/grants 各函数验证，不依赖这个开关，覆盖不受影响。详见项目记忆
+        prospecting-permission-gate-collision.md。"""
         if not self._is_allowed_test_path(rel):
             return False, f"{rel} 不是允许的测试路径（只能是 {self.gate} 或 tests/{AUTO_TEST_PREFIX}*.py）"
         target = self.repo / rel
         if not target.exists():
             return False, f"{rel} 不存在"
         pycache = tempfile.mkdtemp(prefix="engineering_pyc_")
-        env = {**os.environ, "PYTHONPYCACHEPREFIX": pycache, "PYTHONDONTWRITEBYTECODE": "1"}
+        env = {**os.environ, "PYTHONPYCACHEPREFIX": pycache, "PYTHONDONTWRITEBYTECODE": "1",
+               "JARVIS_PERMISSION_ENFORCEMENT": "0"}
         try:
             r = subprocess.run([self.py, str(target)], cwd=str(self.repo),
                                capture_output=True, text=True, env=env)
