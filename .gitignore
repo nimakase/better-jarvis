@@ -51,3 +51,4 @@ logs/*.log.[0-9]*
 Claude outputs/
 _to_delete/
 workspace/results/*
+_pre_history_rewrite_backup.bundle
