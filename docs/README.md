@@ -6,6 +6,7 @@
 
 | 文档 | 位置 | 职责 | 是否被代码引用 |
 |------|------|------|----------------|
+| `README.md` | 仓库根 | 项目入口：一句话定位、核心能力总览、架构图、快速开始 | 否（纯文档） |
 | `ARCHITECTURE.md` | 仓库根 | **架构唯一权威**：分层、模块职责、数据流、注册表家族 | 否（纯文档） |
 | `docs/SELF_MODEL.md` | docs/ | 代码边界（核心/周边）人类可读镜像 | 由 `core/self_model.py` 生成 |
 | `docs/tool_authoring_diagnosis.md` | docs/ | 造工具能力诊断（oem_ems_screener 复盘）+ 四期改动 | 否 |
