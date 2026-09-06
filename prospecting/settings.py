@@ -43,6 +43,13 @@ class CustomerLoopSettings(BaseSettings):
     # 字段名不加前缀(跟历史 .env 变量名 BITABLE_APP_TOKEN/BITABLE_TABLE_ID 保持一致)。
     bitable_app_token: str = ""
     bitable_table_id: str = ""
+    # Breeze outreach 查询要按【真实 CRM owner 姓名】过滤"谁发的邮件"（见
+    # prospecting/breeze_outreach.build_prompt）——这个名字必须匹配你 HubSpot 账号的
+    # 显示名才能查对人，所以不能是空字符串占位；但也不能硬编码进源码随 git 泄露
+    # 真实姓名（教训：此前有真实姓名直接写死在这类文件里，仓库转 public 前才发现并改掉）。
+    # 从 .env 的 JARVIS_CRM_OWNER_NAME 读；未配置时退回占位符，此时 Breeze 查询会
+    # 查不到人、明确返回空结果，而不是悄悄查错人。
+    crm_owner_name: str = Field(default="CRM Owner", validation_alias="JARVIS_CRM_OWNER_NAME")
 
 
 _settings = CustomerLoopSettings()
@@ -52,3 +59,4 @@ CUSTOMER_LOOP_APPLY = _settings.customer_loop_apply
 GRADE_VIEW_URL = _settings.grade_view_url
 BITABLE_APP_TOKEN = _settings.bitable_app_token
 BITABLE_TABLE_ID = _settings.bitable_table_id
+CRM_OWNER_NAME = _settings.crm_owner_name

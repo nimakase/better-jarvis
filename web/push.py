@@ -12,6 +12,7 @@ Web Push —— OS 级通知推送。
 import base64
 import json
 import logging
+import os
 
 from fastapi import APIRouter, Body
 from fastapi.responses import JSONResponse
@@ -23,8 +24,11 @@ router = APIRouter()
 
 VAPID_PATH = config.DATA_DIR / "vapid.json"
 SUBS_PATH = config.DATA_DIR / "push_subscriptions.json"
-# VAPID 联系人（推送服务用于联系发送方）；可改成你的邮箱
-VAPID_SUBJECT = "mailto:admin@example.com"
+# VAPID 联系人（推送服务用于联系发送方，规范要求是能联系到站点所有者的真实地址）。
+# 不硬编码真实邮箱进源码（随 git 泄露）——从 env 读，本机部署时在 .env 设
+# JARVIS_VAPID_SUBJECT=mailto:you@example.com；未设置则用占位符（功能不受影响，
+# 只影响推送服务出问题时联系不到你）。
+VAPID_SUBJECT = os.environ.get("JARVIS_VAPID_SUBJECT", "mailto:admin@example.com")
 
 
 def _gen_vapid() -> dict:

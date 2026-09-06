@@ -12,6 +12,8 @@ import json
 import re
 from typing import Optional
 
+from prospecting.settings import CRM_OWNER_NAME
+
 
 # ── 提问模板 ──────────────────────────────────────────────────
 def _exact_guard(account_name: str, website: Optional[str] = None) -> str:
@@ -28,7 +30,8 @@ def _exact_guard(account_name: str, website: Optional[str] = None) -> str:
     )
 
 
-def build_prompt(account_name: str, website: Optional[str] = None) -> str:
+def build_prompt(account_name: str, website: Optional[str] = None,
+                  owner_name: str = CRM_OWNER_NAME) -> str:
     """给 Breeze 的问题:只要事实,固定 JSON 输出。
 
     ⚠ 必须【单行、无换行】—— 聊天输入框里换行=回车=提前发送(会把 prompt 打断成好几条)。
@@ -39,11 +42,11 @@ def build_prompt(account_name: str, website: Optional[str] = None) -> str:
     """
     return _exact_guard(account_name, website) + (
         f'For the company account "{account_name}", list every cold-outreach email sent BY '
-        f'Alex Test to its contacts (usually 3 emails sharing the same subject line). For each give: '
+        f'{owner_name} to its contacts (usually 3 emails sharing the same subject line). For each give: '
         f'date, subject, recipient contact name, and the recipient\'s job title if known. Also list '
-        f'the names of any contacts at this company who have sent ANY inbound message back to Ned '
+        f'the names of any contacts at this company who have sent ANY inbound message back to {owner_name} '
         f'(just report the fact that they replied; do not judge whether it is substantive). '
-        f'Exclude replies themselves and any email not sent by Ned. Reply with ONLY one-line JSON (no line breaks, '
+        f'Exclude replies themselves and any email not sent by {owner_name}. Reply with ONLY one-line JSON (no line breaks, '
         f'no other text) in this shape: '
         f'{{"account":"{account_name}","found":true,'
         f'"outreach_emails":[{{"date":"YYYY-MM-DD","subject":"","to_contact":"","job_title":""}}],'
