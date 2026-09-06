@@ -1,192 +1,291 @@
 {
-  "version": "3.0",
-  "note": "潜客树 · 产品类目 × 区域（v3.0：与信号库彻底解耦）。节点 = (产品类目, 区域) 组合，共 76 类目 × 3 区域 = 228 个。同一类目连跑完三个区域再换下一个——这样能拿到同类目、同口径的区域对照。leaf.done_regions 记录该类目已跑完哪些区域；三个都跑完 leaf.status 才转 done。骨架取自 HS 编码 84/85/87/88/90/94 章，只保留『含板级电子的成品设备』，剔除元件本体(8532/8533/8541/8542)与原材料。label 是给人看的产品类目，hs_codes 只在背后保证不漏项。【v3.0 移除 signal_sectors】该字段唯一用途是映射信号词表给潜客打意向分；潜客名单服务 0→1 开发（周期以月计），信号服务存量决策（时效几周、赛道级粒度），两者节奏与粒度不匹配，已彻底解耦。此树不再与信号库有任何关联。",
+  "version": "4.0",
+  "note": "潜客树 · 产品类目 × 区域（v4.0：从 HS 编码骨架改为 NAICS 2022 审查驱动的横向模组+纵向类目混合结构）。v3.0 用海关 HS 编码搭骨架，混入大量大型整机/设备（如印刷机、低压机柜整机），这些整机厂不做板级贴片、出货量少价值低，不是真正目标——真正目标是这些整机里的驱动/控制/电源模组供应商。v4.0 用 NAICS 2022制造业分类（332/333/334/335/336/339 共121个6位码）逐条审查：能直接用的类目保留（如半导体设备、通信设备），需要深挖的类目下钻到模组粒度并按供应商重叠去重合并（17个老叶子合并进电机/继电器2个横向节点），NAICS无法覆盖但此前已验证有效的类目原样保留（如机器人、能源电力6条）。节点 = (产品类目, 区域) 组合，共 52 类目 × 5 区域 = 260 个。leaf.done_regions 记录该类目已跑完哪些区域；全部区域跑完 leaf.status 才转 done。label 是给人看/给LLM判断提示词用的中文产品类目名；label_en 是给搜索查询用的英文类目名（2026-08-21 新增字段——此前路径B/C的查询词一直在用中文label拼英文查询，跟代码注释里\"查询词特意用英文\"的设计意图不符，是本轮修复的bug之一）。naics_codes 只在背后保证不漏项，不是搜索边界。max_rounds 按吸收了几个老叶子/行业体量差异化（14~26），target_candidates 统一改成全局单一值（见 prospecting/workflows.py _TARGET_CANDIDATES=500，不再逐节点配置——理由见项目备忘录prospecting-generation-v3-redesign）。v4.0 起不继承 v3.0 任何 done_regions/skipped_regions 进度，全部节点从零开始（用户明确要求，成本可接受）。【仍不与信号库关联，沿用 v3.0 的解耦设计】",
   "regions_meta": {
-    "EU": "欧洲（德/意/法/荷/北欧/波兰/捷克等，含英国）",
-    "NA": "美洲（美国、加拿大、墨西哥）",
-    "SEA": "东南亚（新加坡、马来西亚、泰国、越南、印尼、菲律宾）"
+    "EU": "欧洲（德国、意大利、法国、荷兰、北欧、波兰、捷克、英国、西班牙、比利时、奥地利、瑞士）",
+    "NA": "北美（美国、加拿大、墨西哥）",
+    "SEA": "东南亚（新加坡、马来西亚、泰国、越南、印尼、菲律宾）",
+    "EA": "东亚（日本、韩国、台湾；不含中国大陆与香港）",
+    "SA": "南美（巴西、阿根廷、哥伦比亚）"
   },
   "sectors": [
     {
-      "id": "industrial_automation",
-      "label": "工业自动化与工厂设备",
+      "id": "horizontal_modules",
+      "label": "横向模组与代工制造商",
       "status": "partial",
       "children": [
         {
-          "id": "ia_robotics",
-          "label": "工业机器人与机械臂",
+          "id": "mod_ems_pcba",
+          "label": "EMS/PCBA代工",
+          "label_en": "EMS / PCBA Contract Manufacturing",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8479.50",
-            "8428.90"
+          "naics_codes": [
+            "334418"
           ],
+          "max_rounds": 22,
+          "status": "pending",
+          "done_regions": [
+            "EU"
+          ]
+        },
+        {
+          "id": "mod_process_instruments",
+          "label": "工业过程测控仪表",
+          "label_en": "Process Control Instruments",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "334513"
+          ],
+          "max_rounds": 18,
           "status": "pending",
           "done_regions": [
             "EU",
             "NA"
-          ]
+          ],
+          "skipped_regions": []
         },
         {
-          "id": "ia_cnc",
-          "label": "数控机床与加工中心",
+          "id": "mod_sensors_ndt",
+          "label": "其他测控装置",
+          "label_en": "Sensors & Non-Destructive Testing Equipment",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8457",
-            "8458",
-            "8459",
-            "8466.93"
+          "naics_codes": [
+            "334519"
           ],
+          "max_rounds": 16,
+          "status": "pending",
+          "done_regions": [
+            "EU"
+          ],
+          "skipped_regions": []
+        },
+        {
+          "id": "mod_transformers",
+          "label": "变压器/配电设备",
+          "label_en": "Transformers & Power Distribution Equipment",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "335311"
+          ],
+          "max_rounds": 16,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "ia_plc_drives",
-          "label": "可编程控制器与工业变频驱动",
+          "id": "mod_motors_generators",
+          "label": "电机与发电机",
+          "label_en": "Electric Motors & Generators",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8537.10",
-            "8504.40"
+          "naics_codes": [
+            "335312"
           ],
+          "max_rounds": 26,
+          "status": "pending",
+          "done_regions": []
+        },
+        {
+          "id": "mod_switchgear",
+          "label": "开关设备与配电盘",
+          "label_en": "Switchgear & Switchboards",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "335313"
+          ],
+          "max_rounds": 18,
+          "status": "pending",
+          "done_regions": []
+        },
+        {
+          "id": "mod_relays_controllers",
+          "label": "继电器与工业控制器",
+          "label_en": "Relays & Industrial Controllers",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "335314"
+          ],
+          "max_rounds": 26,
+          "status": "pending",
+          "done_regions": []
+        },
+        {
+          "id": "mod_led_driver",
+          "label": "LED驱动模块",
+          "label_en": "LED Driver Modules",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "335131（住宅照明缺口）"
+          ],
+          "max_rounds": 14,
+          "status": "pending",
+          "done_regions": [
+            "EU",
+            "NA"
+          ],
+          "skipped_regions": []
+        },
+        {
+          "id": "mod_smart_actuators",
+          "label": "智能执行器/阀门定位器",
+          "label_en": "Smart Valve Actuators & Positioners",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "332911 + 333995"
+          ],
+          "max_rounds": 14,
+          "status": "pending",
+          "done_regions": [
+            "EU"
+          ],
+          "skipped_regions": []
+        },
+        {
+          "id": "mod_service_equipment_ctrl",
+          "label": "自助/商用服务设备控制模块",
+          "label_en": "Self-Service & Commercial Equipment Control Modules",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "333310"
+          ],
+          "max_rounds": 14,
+          "status": "pending",
+          "done_regions": []
+        },
+        {
+          "id": "mod_digital_signage",
+          "label": "数字标牌/LED显示模块",
+          "label_en": "Digital Signage & LED Display Modules",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "339950"
+          ],
+          "max_rounds": 14,
+          "status": "pending",
+          "done_regions": []
+        },
+        {
+          "id": "mod_welding_power",
+          "label": "焊接电源模块",
+          "label_en": "Welding Power Sources",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "333992"
+          ],
+          "max_rounds": 14,
+          "status": "pending",
+          "done_regions": []
+        }
+      ]
+    },
+    {
+      "id": "industrial_automation",
+      "label": "工业自动化与工厂设备",
+      "status": "pending",
+      "children": [
+        {
+          "id": "ia_robotic_arms",
+          "label": "机器人机械臂制造商",
+          "label_en": "Industrial Robots & Robotic Arms",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "无——旧树保留"
+          ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         },
         {
           "id": "ia_machine_vision",
-          "label": "工业摄像头与机器视觉系统",
+          "label": "工业机器视觉系统",
+          "label_en": "Machine Vision Systems",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8525.89",
-            "9006.30",
-            "9031.49"
+          "naics_codes": [
+            "无——旧树保留"
           ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "ia_additive",
-          "label": "3D 打印与增材制造设备",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8485.20",
-            "8485.30",
-            "8477.59"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "ia_packaging",
-          "label": "包装、灌装与贴标机械",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8422.30",
-            "8422.40",
-            "8438"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "ia_welding",
-          "label": "焊接与激光加工设备",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8515.31",
-            "8515.80",
-            "8456.11"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "ia_plastics",
-          "label": "注塑机与塑料加工机械",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8477.10",
-            "8477.20",
-            "8477.80"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "ia_logistics",
-          "label": "物流自动化与分拣设备",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8428.20",
-            "8428.39",
-            "8479.89"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "ia_valves",
-          "label": "工业阀门与智能执行器",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8481.80",
-            "9032.81",
-            "9026.20"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "ia_compressors",
-          "label": "空压机与流体输送设备",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8414.40",
-            "8414.80",
-            "8413.70"
-          ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         }
@@ -198,97 +297,74 @@
       "status": "pending",
       "children": [
         {
-          "id": "tm_oscilloscope",
-          "label": "示波器与电子测试仪器",
+          "id": "test_flow_counters",
+          "label": "流量计与计数装置",
+          "label_en": "Flow Meters & Totalizing Counters",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "9030.20",
-            "9030.32",
-            "9030.84"
+          "naics_codes": [
+            "334514"
           ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "tm_analyzers",
-          "label": "环境、气体与光谱分析仪",
+          "id": "test_electrical_instruments",
+          "label": "电气测试仪器",
+          "label_en": "Electrical Test Instruments",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "9027.10",
-            "9027.30",
-            "9027.81"
+          "naics_codes": [
+            "334515"
           ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "tm_transmitters",
-          "label": "工业传感变送器（压力/流量/温度）",
+          "id": "test_lab_instruments",
+          "label": "分析实验室仪器",
+          "label_en": "Analytical Laboratory Instruments",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "9026.10",
-            "9026.20",
-            "9025.19"
+          "naics_codes": [
+            "334516"
           ],
+          "max_rounds": 16,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "tm_weighing",
-          "label": "计量称重与检重设备",
+          "id": "test_weighing",
+          "label": "计量称重设备",
+          "label_en": "Industrial Weighing Systems",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8423.30",
-            "8423.81",
-            "9016"
+          "naics_codes": [
+            "无——旧树保留"
           ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "tm_ndt",
-          "label": "无损检测与工业探伤设备",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "9022.19",
-            "9031.80"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "tm_lab_instruments",
-          "label": "实验室科学仪器（色谱/质谱/电镜）",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "9012.10",
-            "9027.20",
-            "9027.30"
-          ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         }
@@ -300,83 +376,74 @@
       "status": "pending",
       "children": [
         {
-          "id": "md_imaging",
-          "label": "医学影像设备（CT/MR/超声/X 光）",
+          "id": "med_electrotherapy_imaging",
+          "label": "电子医疗与电疗仪器",
+          "label_en": "Medical Imaging & Electrotherapeutic Devices",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "9018.12",
-            "9018.13",
-            "9018.14",
-            "9022.12"
+          "naics_codes": [
+            "334510"
           ],
+          "max_rounds": 18,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "md_monitoring",
-          "label": "患者监护与生命支持设备",
+          "id": "med_irradiation",
+          "label": "辐照设备",
+          "label_en": "Irradiation & Sterilization Equipment",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "9018.19",
-            "9019.20",
-            "9018.90"
+          "naics_codes": [
+            "334517"
           ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "md_ivd_lab",
-          "label": "体外诊断与实验室分析仪",
+          "id": "med_surgical",
+          "label": "外科与医疗器械",
+          "label_en": "Surgical & Medical Instruments",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "9027.80",
-            "9027.89",
-            "8419.89"
+          "naics_codes": [
+            "339112"
           ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "md_surgical_dental",
-          "label": "外科与牙科电子设备",
+          "id": "med_dental",
+          "label": "牙科设备与用品",
+          "label_en": "Dental Equipment & Supplies",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "9018.41",
-            "9018.49",
-            "9018.90"
+          "naics_codes": [
+            "339114"
           ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "md_rehab_hearing",
-          "label": "康复、助听与可植入电子",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "9021.40",
-            "9021.50",
-            "9021.90"
-          ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         }
@@ -388,92 +455,20 @@
       "status": "pending",
       "children": [
         {
-          "id": "tn_handsets",
-          "label": "手机与移动终端",
+          "id": "telecom_equipment",
+          "label": "通信设备",
+          "label_en": "Telecom & Networking Equipment",
           "regions": [
+            "EU",
+            "NA",
             "SEA",
-            "EU",
-            "NA"
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8517.13",
-            "8517.14"
+          "naics_codes": [
+            "334210/334220/334290"
           ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "tn_switching",
-          "label": "网络交换与路由设备",
-          "regions": [
-            "NA",
-            "EU",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8517.62"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "tn_basestation",
-          "label": "基站与射频拉远单元",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8517.61",
-            "8517.71"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "tn_satcom",
-          "label": "卫星通信终端与地面站",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8525.60",
-            "8529.10"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "tn_optical",
-          "label": "光纤传输与宽带接入设备",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8517.62",
-            "9013.80",
-            "8544.70"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "tn_radio",
-          "label": "专业无线电与对讲通信",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8517.69",
-            "8525.50"
-          ],
+          "max_rounds": 20,
           "status": "pending",
           "done_regions": []
         }
@@ -482,97 +477,139 @@
     {
       "id": "energy_power",
       "label": "能源与电力电子",
-      "status": "pending",
+      "status": "partial",
       "children": [
         {
-          "id": "ep_pv_inverter",
+          "id": "energy_battery_mfg",
+          "label": "电池制造",
+          "label_en": "Battery Manufacturing",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "335910"
+          ],
+          "max_rounds": 16,
+          "status": "pending",
+          "done_regions": []
+        },
+        {
+          "id": "energy_pv_inverter",
           "label": "光伏逆变器与储能变流器",
+          "label_en": "Solar Inverters & Energy Storage Converters",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8504.40",
-            "8541.43"
+          "naics_codes": [
+            "无——旧树保留"
           ],
+          "max_rounds": 14,
+          "status": "pending",
+          "done_regions": [
+            "EU",
+            "NA"
+          ],
+          "skipped_regions": []
+        },
+        {
+          "id": "energy_ups",
+          "label": "UPS与数据中心供电系统",
+          "label_en": "UPS & Data Center Power Systems",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "无——旧树保留"
+          ],
+          "max_rounds": 14,
+          "status": "pending",
+          "done_regions": [
+            "EU",
+            "NA"
+          ],
+          "skipped_regions": []
+        },
+        {
+          "id": "energy_ev_charging",
+          "label": "电动车充电桩",
+          "label_en": "EV Charging Stations",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "无——旧树保留"
+          ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "ep_ups",
-          "label": "UPS 与数据中心供电系统",
+          "id": "energy_bms_storage",
+          "label": "电池管理与储能系统集成(BMS)",
+          "label_en": "Battery Management & Energy Storage Systems",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8504.40",
-            "8507.20"
+          "naics_codes": [
+            "无——旧树保留"
           ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "ep_ev_charging",
-          "label": "电动车充电桩与充电系统",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8504.40",
-            "8537.10"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "ep_bms_storage",
-          "label": "电池管理与储能系统集成",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8507.60",
-            "8537.10"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "ep_smart_meter",
+          "id": "energy_smart_meter",
           "label": "智能电表与配电自动化",
+          "label_en": "Smart Meters & Distribution Automation",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "9028.30",
-            "9030.89",
-            "8537.20"
+          "naics_codes": [
+            "无——旧树保留"
           ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "ep_generator_control",
+          "id": "energy_generator_control",
           "label": "发电机组与并网控制设备",
+          "label_en": "Generator Sets & Grid-Tie Control Equipment",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8502.20",
-            "8502.39",
-            "8537.10"
+          "naics_codes": [
+            "无——旧树保留"
           ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         }
@@ -584,99 +621,74 @@
       "status": "pending",
       "children": [
         {
-          "id": "au_infotainment",
-          "label": "车载信息娱乐与智能座舱",
+          "id": "auto_electronics",
+          "label": "机动车电气与电子设备",
+          "label_en": "Automotive Electrical & Electronic Equipment",
           "regions": [
             "EU",
             "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8527.21",
-            "8528.59",
-            "8512.30"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "au_adas",
-          "label": "ADAS 与车载感知模块",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8512.30",
-            "8525.89",
-            "9025.19",
-            "8526.10"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "au_commercial",
-          "label": "商用车与特种车电子",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8708.99",
-            "8705.90",
-            "8709"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "au_rail",
-          "label": "轨道交通信号与车载电子",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8530.10",
-            "8603",
-            "8607.21"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "au_lev",
-          "label": "电动两轮与轻型车控制器",
-          "regions": [
-            "EU",
             "SEA",
-            "NA"
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8711.60",
-            "8714.10",
-            "8714.99"
+          "naics_codes": [
+            "336320"
           ],
+          "max_rounds": 20,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "au_powertrain",
-          "label": "车用电驱与充配电总成",
+          "id": "auto_brake_tcu",
+          "label": "制动/变速箱电子控制单元",
+          "label_en": "Brake & Transmission Control Units",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8501.32",
-            "8501.52",
-            "8504.40"
+          "naics_codes": [
+            "336340/336350"
           ],
+          "max_rounds": 14,
+          "status": "pending",
+          "done_regions": []
+        },
+        {
+          "id": "auto_rail_control",
+          "label": "轨道交通车载控制模块",
+          "label_en": "Rail Onboard Control Systems",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "336510"
+          ],
+          "max_rounds": 14,
+          "status": "pending",
+          "done_regions": []
+        },
+        {
+          "id": "auto_lev_controller",
+          "label": "电动两轮车控制器",
+          "label_en": "Light Electric Vehicle Controllers",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "336991"
+          ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         }
@@ -688,64 +700,56 @@
       "status": "pending",
       "children": [
         {
-          "id": "ad_avionics",
-          "label": "航电与飞行控制系统",
+          "id": "aero_nav_avionics",
+          "label": "导航/制导/航空航海系统",
+          "label_en": "Navigation, Avionics & Marine Electronics",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8526.91",
-            "8803.30",
-            "9014.20"
+          "naics_codes": [
+            "334511"
           ],
+          "max_rounds": 18,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "ad_uav",
+          "id": "aero_aircraft_parts",
+          "label": "飞机零件与辅助设备",
+          "label_en": "Aircraft Parts & Auxiliary Equipment",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "336413"
+          ],
+          "max_rounds": 15,
+          "status": "pending",
+          "done_regions": []
+        },
+        {
+          "id": "aero_uav_payload",
           "label": "无人机与机载载荷",
+          "label_en": "UAVs & Payload Systems",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8806.21",
-            "8806.91",
-            "8807.30"
+          "naics_codes": [
+            "无——旧树保留"
           ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "ad_radar_nav",
-          "label": "地面雷达与导航设备",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8526.10",
-            "8526.92"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "ad_space",
-          "label": "卫星载荷与空间电子",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8802.60",
-            "8803.90"
-          ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         }
@@ -757,97 +761,74 @@
       "status": "pending",
       "children": [
         {
-          "id": "sb_cctv",
+          "id": "sec_commercial_lighting",
+          "label": "商用照明装置",
+          "label_en": "Commercial & Industrial Lighting Fixtures",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [
+            "335132"
+          ],
+          "max_rounds": 14,
+          "status": "pending",
+          "done_regions": []
+        },
+        {
+          "id": "sec_cctv_surveillance",
           "label": "安防摄像头与录像存储",
+          "label_en": "CCTV & Video Surveillance",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8525.89",
-            "8521.90",
-            "8529.90"
+          "naics_codes": [
+            "无——旧树保留"
           ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "sb_access",
+          "id": "sec_access_control",
           "label": "门禁、闸机与生物识别",
+          "label_en": "Access Control & Biometric Systems",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8543.70",
-            "8471.60",
-            "8301.40"
+          "naics_codes": [
+            "无——旧树保留"
           ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "sb_bms_hvac",
-          "label": "楼宇自控与暖通控制",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "9032.10",
-            "9032.89",
-            "8537.10"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "sb_fire_alarm",
+          "id": "sec_fire_alarm",
           "label": "消防报警与紧急疏散系统",
+          "label_en": "Fire Alarm & Emergency Evacuation Systems",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8531.10",
-            "8531.80"
+          "naics_codes": [
+            "无——旧树保留"
           ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "sb_lighting",
-          "label": "智能照明与 LED 驱动系统",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "9405.11",
-            "9405.41",
-            "8504.10"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "sb_elevator",
-          "label": "电梯与扶梯控制系统",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8428.10",
-            "8428.40",
-            "8431.31"
-          ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         }
@@ -859,81 +840,74 @@
       "status": "pending",
       "children": [
         {
-          "id": "cd_server_storage",
-          "label": "服务器与存储系统",
+          "id": "comp_peripherals",
+          "label": "计算机与外围设备",
+          "label_en": "Industrial Computers & Peripherals",
           "regions": [
-            "NA",
             "EU",
-            "SEA"
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8471.50",
-            "8471.70"
+          "naics_codes": [
+            "334111/334112/334118"
           ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "cd_industrial_pc",
-          "label": "工业计算机与嵌入式主机",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8471.41",
-            "8471.49",
-            "8473.30"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "cd_display",
+          "id": "comp_display",
           "label": "专业显示与交互终端",
+          "label_en": "Industrial Displays & Touch Panel PCs",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8528.52",
-            "8528.59",
-            "8471.60"
+          "naics_codes": [
+            "无——旧树保留"
           ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "cd_pos_kiosk",
-          "label": "POS 收银与自助服务终端",
+          "id": "comp_pos_kiosk",
+          "label": "POS收银与自助服务终端",
+          "label_en": "POS Terminals & Self-Service Kiosks",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8470.50",
-            "8472.90",
-            "8443.32"
+          "naics_codes": [
+            "无——旧树保留"
           ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "cd_printing",
+          "id": "comp_commercial_printing",
           "label": "商用打印与影像输出设备",
+          "label_en": "Commercial Printing & Label Equipment",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8443.31",
-            "8443.32",
-            "8443.39"
+          "naics_codes": [
+            "无——旧树保留"
           ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         }
@@ -945,114 +919,38 @@
       "status": "pending",
       "children": [
         {
-          "id": "ca_smart_appliance",
-          "label": "智能家电与白电控制板",
+          "id": "av_equipment",
+          "label": "音视频设备",
+          "label_en": "Professional Audio-Video Equipment",
           "regions": [
             "EU",
+            "NA",
             "SEA",
-            "NA"
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8418.10",
-            "8450.11",
-            "8516.60",
-            "8422.11"
+          "naics_codes": [
+            "334310"
           ],
+          "max_rounds": 15,
           "status": "pending",
           "done_regions": []
         },
         {
-          "id": "ca_audio",
-          "label": "音视频与专业音响设备",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8518.21",
-            "8518.40",
-            "8519.81",
-            "8527.91"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "ca_wearable",
+          "id": "wearable_health",
           "label": "可穿戴与个人健康电子",
+          "label_en": "Wearable & Personal Health Electronics",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "9102.12",
-            "9029.10",
-            "9031.80"
+          "naics_codes": [
+            "无——旧树保留"
           ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "ca_gaming",
-          "label": "游戏机与娱乐终端",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "9504.30",
-            "9504.50"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "ca_power_tools",
-          "label": "电动工具与园艺设备",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8467.21",
-            "8467.29",
-            "8508.11"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "ca_broadcast",
-          "label": "广播级影视与演播设备",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8525.89",
-            "8528.49",
-            "8543.70"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "ca_fitness",
-          "label": "健身与康体电子设备",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "9506.91",
-            "9021.10"
-          ],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         }
@@ -1064,80 +962,20 @@
       "status": "pending",
       "children": [
         {
-          "id": "se_frontend",
-          "label": "半导体前道制造设备",
+          "id": "semi_frontend_equipment",
+          "label": "半导体制造设备",
+          "label_en": "Semiconductor & Electronics Manufacturing Equipment",
           "regions": [
             "EU",
             "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8486.10",
-            "8486.20"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "se_smt",
-          "label": "SMT 贴装与回流焊生产线",
-          "regions": [
-            "EU",
             "SEA",
-            "NA"
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8486.30",
-            "8486.40",
-            "8515.80"
+          "naics_codes": [
+            "333242"
           ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "se_ate",
-          "label": "电子测试、老化与分选设备",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "9030.82",
-            "8486.40"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "se_cleanroom",
-          "label": "洁净室与工艺辅助设备",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8421.39",
-            "8479.89",
-            "8514.30"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "se_battery",
-          "label": "电池与新能源制造设备",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8479.89",
-            "8514.30",
-            "8543.30"
-          ],
+          "max_rounds": 18,
           "status": "pending",
           "done_regions": []
         }
@@ -1145,153 +983,123 @@
     },
     {
       "id": "specialty_machinery",
-      "label": "农业、船舶与专用机械",
+      "label": "专用工艺设备",
       "status": "pending",
       "children": [
         {
-          "id": "sm_agri",
-          "label": "农机与精准农业电子",
+          "id": "sm_heatpump",
+          "label": "热泵设备",
+          "label_en": "Heat Pumps",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8432.80",
-            "8433.51",
-            "8436.80"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "sm_marine",
-          "label": "船舶电子与航海导航",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8526.91",
-            "8526.10",
-            "8906.90"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "sm_construction",
-          "label": "工程机械与矿山设备电子",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8429.52",
-            "8430.41",
-            "8431.49"
-          ],
+          "naics_codes": [],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         },
         {
           "id": "sm_cold_chain",
-          "label": "冷链、制冷与温控设备",
+          "label": "冷链与制冷设备",
+          "label_en": "Cold Chain & Refrigeration Equipment",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8418.69",
-            "8415.82",
-            "9032.10"
-          ],
+          "naics_codes": [],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         },
         {
           "id": "sm_water_treatment",
-          "label": "水处理与环保设备电控",
+          "label": "水处理设备",
+          "label_en": "Water Treatment Equipment",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8421.21",
-            "8421.39",
-            "8413.70"
-          ],
+          "naics_codes": [],
+          "max_rounds": 14,
           "status": "pending",
           "done_regions": []
         },
         {
           "id": "sm_textile_print",
-          "label": "纺织与印刷机械电控",
+          "label": "纺织印染设备",
+          "label_en": "Textile & Printing Machinery",
           "regions": [
             "EU",
+            "NA",
             "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [],
+          "max_rounds": 14,
+          "status": "pending",
+          "done_regions": []
+        }
+      ]
+    },
+    {
+      "id": "iot_sensing",
+      "label": "IoT与智能感知",
+      "status": "partial",
+      "children": [
+        {
+          "id": "iot_telematics",
+          "label": "车队/资产追踪（Telematics）",
+          "label_en": "Fleet Telematics & GPS Tracking, Asset Tracking, OBD Hardware",
+          "regions": [
+            "EU",
+            "NA",
+            "SEA",
+            "EA",
+            "SA"
+          ],
+          "naics_codes": [],
+          "max_rounds": 14,
+          "status": "pending",
+          "done_regions": [
+            "EU",
             "NA"
           ],
-          "hs_codes": [
-            "8444",
-            "8445.19",
-            "8443.16"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
+          "skipped_regions": []
+        }
+      ]
+    },
+    {
+      "id": "ai_accelerator_startups",
+      "label": "AI芯片与加速器初创",
+      "status": "pending",
+      "children": [
         {
-          "id": "sm_heatpump",
-          "label": "热泵与商用暖通整机",
+          "id": "ai_chip_startup",
+          "label": "AI推理芯片/加速器初创",
+          "label_en": "AI Accelerator & Inference Chip Startups, NPU / AI ASIC",
           "regions": [
             "EU",
             "NA",
-            "SEA"
+            "SEA",
+            "EA",
+            "SA"
           ],
-          "hs_codes": [
-            "8415.10",
-            "8418.61",
-            "8418.69"
-          ],
+          "naics_codes": [],
+          "max_rounds": 14,
           "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "sm_woodworking",
-          "label": "木工、石材与建材机械电控",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8465.10",
-            "8464.90",
-            "8474.80"
-          ],
-          "status": "pending",
-          "done_regions": []
-        },
-        {
-          "id": "sm_printing_press",
-          "label": "工业印刷机械（胶印/柔印/数码）",
-          "regions": [
-            "EU",
-            "NA",
-            "SEA"
-          ],
-          "hs_codes": [
-            "8443.11",
-            "8443.12",
-            "8443.16",
-            "8443.19"
-          ],
-          "status": "pending",
-          "done_regions": []
+          "done_regions": [],
+          "skipped_regions": []
         }
       ]
     }

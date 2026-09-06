@@ -90,11 +90,14 @@ def sort_key(rec: dict) -> tuple:
 #
 # v0.4 移除 weight / intent_tier / intent_score / surplus_signals / sources 五列
 # （随信号解耦）；v0.5 移除 seen_before（随历史库删除）。
+# v0.6 加 parent_note（生成层产出）：官网/资料明确提到的母公司/集团归属，纯软信号，
+#   不做自动排除（won 客户里有独立成交的集团子公司反例，见 prospect_generation_prompt.md
+#   「对分支机构不做硬排除」的讨论）——留空表示查不到归属或就是独立公司。
 COLUMNS = [
     "rank", "crm_state", "hubspot_status", "hubspot_owner",
     "category", "confidence",
     "company_name", "website", "country", "components",
-    "contact_rationale", "evidence",
+    "contact_rationale", "evidence", "parent_note",
 ]
 
 
@@ -176,7 +179,8 @@ def write_xlsx(records: list[dict], path: str) -> str:
 
     widths = {"company_name": 28, "website": 22, "contact_rationale": 50,
               "components": 18, "country": 14,
-              "evidence": 36, "category": 10, "confidence": 10}
+              "evidence": 36, "category": 10, "confidence": 10,
+              "parent_note": 22}
     for i, col in enumerate(COLUMNS, 1):
         ws.column_dimensions[get_column_letter(i)].width = widths.get(col, 12)
     ws.freeze_panes = "A2"

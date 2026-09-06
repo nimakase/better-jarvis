@@ -243,8 +243,15 @@ if REAL_TREE.exists():
     check("真实树：有 regions_meta 供展开人话区域名", bool(real.get("regions_meta")))
     check("真实树：每个类目都有 done_regions（区域各自推进）",
           all(isinstance(l.get("done_regions"), list) for l in leaves))
+    # 2026-08-14：不再硬编码"每叶子3个区域"——区域框架v2把每个叶子从
+    # [EU,NA,SEA] 扩到 [EU,NA,SEA,EA,SA]（新增东亚/南美），这是有意的产品决策
+    # 不是回归（见 [[prospecting-generation-v3-redesign]]）。改成从 regions_meta
+    # 实际声明的区域数反推期望值，往后再加/减区域，这条测试不用跟着手改。
     _combos = sum(len(l["regions"]) for l in leaves)
-    check(f"真实树：(类目×区域) 组合数 = {_combos}", _combos == len(leaves) * 3)
+    _n_regions = len(real.get("regions_meta") or {})
+    check(f"真实树：(类目×区域) 组合数 = {_combos}（每叶子应覆盖 regions_meta 声明的 "
+          f"全部 {_n_regions} 个区域）",
+          _combos == len(leaves) * _n_regions)
     check("真实树：所有 regions 代号都在 regions_meta 里",
           all(r in real["regions_meta"] for l in leaves for r in l["regions"]))
     check("真实树：select_node 能选出节点", gen.select_node(REAL_TREE) is not None)

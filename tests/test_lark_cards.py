@@ -77,7 +77,11 @@ def test_form_card_structure():
     assert form["elements"][0]["label"]["content"] == "标题"
     submit = form["elements"][-1]
     assert submit["tag"] == "button"
-    assert submit["action_type"] == "form_submit"
+    # 飞书 2.0 实测：form 内提交按钮必须用 form_action_type=submit（不是
+    # action_type=form_submit，后者被当普通回调按钮 → 整卡拒收 code=230099）。
+    # 见 scripts/test_lark_form.py 的真机探针结果。
+    assert submit["form_action_type"] == "submit"
+    assert "action_type" not in submit  # 别回退到会被飞书拒收的旧写法
     assert submit["behaviors"][0]["value"][lc.INTENT_KEY] == "新建日历事件"
     # select 字段渲染成 select_static
     kind = form["elements"][2]

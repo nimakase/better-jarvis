@@ -11,8 +11,9 @@
     round_due   —— 还在跑,但距上封 > ROUND_DUE_DAYS(该发下一轮了,提醒 Ned)
     exhausted   —— 三轮跑完仍没回(决策点:换 contact 重开 / 撒手让其 decay)
     replied     —— 有联系人回过信(最高优先)
-  死线钟(公司 time-decay):由 HubSpot 原生 Decay Stage 属性【读入】,原样透传(decay_stage),
-    orchestration 用它把临近 final warning 的账户单独拎出提醒,不在本模块算。
+  死线钟(公司 time-decay):HubSpot 无原生 Decay Stage 属性 → orchestration 用
+    derive_decay_stage(Last Activity Date)推导后传入(decay_stage 参数原样透传),
+    用它把临近 final warning 的账户单独拎出提醒,不在本模块算。
 
 轮次从发送日期【聚簇】反推(同一轮 3 封连发挤在一起,轮间隔 ~2 月):相邻发送间隔
   > NEW_ROUND_GAP_DAYS 即新一轮。公司 auto-sequence 用 Ned 身份发、只在停手约 4.5 个月后触发,

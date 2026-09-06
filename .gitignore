@@ -44,3 +44,9 @@ Thumbs.db
 # 仓库里出现这个目录说明某个技能又把 base_dir 猜成了仓库根（见 skill_policy 的
 # 「profile 目录 · 必读」约定）。忽略它，同时它出现本身就是个信号。
 chrome_profile/
+
+# 运行时产物：日志滚动文件、临时导出结果、待清理内容（不入库）
+logs/*.log.[0-9]*
+Claude outputs/
+_to_delete/
+workspace/results/*

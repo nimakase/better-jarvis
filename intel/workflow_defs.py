@@ -79,10 +79,13 @@ def load_today_prospects() -> dict | None:
     return None
 
 
-def _build_prospect_daily():
-    """运行时组装潜客工作流（注入浏览器/agent 等运行时依赖）。"""
+def resolve_prospect_paths() -> dict:
+    """潜客工作流用到的几个路径，单一事实来源——原来只在 _build_prospect_daily()
+    内部算一次，connectors/prospecting_tree_tools.py（读树状态/current_node）
+    需要跟工作流本身用【同一套解析结果】，不然两边算出两个不同的树文件就麻烦了，
+    所以拆出来给两边共用。
+    """
     import config
-    from prospecting import workflows as pw
 
     # 潜客树：jarvis 拥有自己的副本（data/prospect_tree.json）并就地推进（mark_done 写回）。
     # 解析顺序：env JARVIS_PROSPECT_TREE（如需指向别处）→ 仓库 data/ 副本 → DATA_DIR。
@@ -93,6 +96,20 @@ def _build_prospect_daily():
     candidates.append(owned)
     candidates.append(config.DATA_DIR / "prospect_tree.json")
     tree_path = next((p for p in candidates if p.exists()), owned)
+    return {
+        "tree_path": tree_path,
+        "pending_path": config.DATA_DIR / "prospects" / "pending_batch.json",
+        "current_node_path": config.DATA_DIR / "prospects" / "current_node.json",
+    }
+
+
+def _build_prospect_daily():
+    """运行时组装潜客工作流（注入浏览器/agent 等运行时依赖）。"""
+    import config
+    from prospecting import workflows as pw
+
+    paths = resolve_prospect_paths()
+    tree_path = paths["tree_path"]
     prompt_path = Path(__file__).resolve().parent / "prospect_generation_prompt.md"
 
     generate_fn = pw.make_llm_generate_fn(prompt_path)
@@ -110,7 +127,11 @@ def _build_prospect_daily():
         tree_path=tree_path,
         generate_fn=generate_fn, preflight_fn=preflight_fn,
         enrich_fn=enrich_fn, output_fn=output_fn,
-        pending_path=config.DATA_DIR / "prospects" / "pending_batch.json",
+        pending_path=paths["pending_path"],
+        # 「现在跑的是哪个节点」实时标记——跟 pending_batch.json 分开存，
+        # 语义不同（这个不代表"生成完了"，纯粹只回答"现在跑到哪了"）。
+        # 供 connectors/prospecting_tree_tools.py 的 prospect_current_node 读取。
+        current_node_path=paths["current_node_path"],
     )
     return {"steps": steps, "context": {}, "cleanup": close}
 

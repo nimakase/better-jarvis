@@ -7,7 +7,6 @@
 """
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -33,11 +32,14 @@ def main() -> int:
     if hit:
         print("   ", {k: hit[k] for k in ("name", "dispatch", "confirm", "needs")})
 
-    apply = os.environ.get("JARVIS_CUSTOMER_LOOP_APPLY", "")
+    # 2026-08-12 配置迁到 prospecting.settings（pydantic 从 .env 读，不进 os.environ）。
+    # 自检必须复用运行时的同一来源（_apply_enabled/_view_url），否则 .env 里配置了
+    # apply=1 或视图 URL 时会被误报成"未设 → dry-run / 默认视图"。
+    apply = connectors.customer_loop_tools._apply_enabled()
+    view_url = connectors.customer_loop_tools._view_url()
     print("② 配置:")
-    print("   生效视图 =", connectors.customer_loop_tools._view_url(),
-          "(env 未设 → 用默认)" if not os.environ.get("JARVIS_GRADE_VIEW_URL") else "(来自 env)")
-    print("   JARVIS_CUSTOMER_LOOP_APPLY=", apply or "(未设 → dry-run,不会真写)")
+    print("   生效视图 =", view_url)
+    print("   写入模式 =", "APPLY(会真写)" if apply else "dry-run(不写)")
 
     print("③ 状态库:")
     print("   冷启动已应用 =", store.is_coldstart_applied())

@@ -53,22 +53,26 @@ colmap = {
     "Account name": "0", "Account type": "1", "Priority": "2",
     "Number of associated deals": "3", "Number of open deals": "4",
     "Number of closed won deals": "5", "Last activity date": "6",
-    "Last engagement date": "7", "Decay stage": "8", "Company domain name": "9",
+    "Last engagement date": "7", "Company domain name": "9",
 }
 cols = ar.match_columns(colmap)
 check(ar.missing_required(cols) == [], f"必填列齐, got missing {ar.missing_required(cols)}")
-for f in ("num_won_deals", "decay_stage", "company_domain"):
+for f in ("num_won_deals", "company_domain"):
     check(f in cols, f"新列 {f} 匹配到")
+# 2026-08-11:decay stage 候选已删除(HubSpot 该 portal 原生没有此属性,永远匹配不到);
+# Priority 已从必填摘除,但仍作可选候选保留(existing_priority),不必须存在。
+check("decay_stage" not in ar.COLUMN_CANDIDATES, "decay_stage 候选已退休")
+check("existing_priority" not in ar.REQUIRED_FIELDS, "existing_priority 已从必填摘除")
 
 raw = {"account_name": "Acme", "existing_type": "Core", "existing_priority": "--",
        "num_associated_deals": "3", "num_open_deals": "0", "num_won_deals": "2",
        "last_activity_date": "2025-05-01", "last_engagement_date": "--",
-       "decay_stage": "Final warning", "company_domain": "acme.com", "create_date": "--"}
+       "company_domain": "acme.com", "create_date": "--"}
 parsed = ar._parse_raw(raw)
 check(parsed["num_won_deals"] == 2, "won 解析")
-check(parsed["decay_stage"] == "Final warning", "decay_stage 解析")
+check("decay_stage" not in parsed, "decay_stage 不再是 _parse_raw 的输出字段")
 check(parsed["company_domain"] == "acme.com", "domain 解析")
-check(ar._parse_raw({"decay_stage": "--", "company_domain": ""})["decay_stage"] is None, "-- / 空 → None")
+check(ar._parse_raw({"company_domain": ""})["company_domain"] is None, "空 → None")
 
 # ── Breeze deal 计数:prompt 消歧 + 解析 + 喂 core_tier ─────────
 dp = bz.build_deal_prompt("Insta Elektro")

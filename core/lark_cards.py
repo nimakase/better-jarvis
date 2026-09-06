@@ -204,8 +204,12 @@ def form_card(text: str, fields: list[dict], *,
         "name": "submit",
         "text": {"tag": "plain_text", "content": submit_label},
         "type": "primary",
-        # 2.0：action_type=form_submit 标记它为表单提交触发器；点击时回调携带 form_value
-        "action_type": "form_submit",
+        # 2.0：把 form 内按钮标记为提交触发器的字段是 form_action_type=submit
+        # （不是 action_type=form_submit——后者会被当成普通回调按钮，飞书判定
+        # form 里没有提交按钮而整卡拒收 code=230099，见 scripts/test_lark_form.py
+        # 的实测：唯有 form_action_type=submit 被飞书接受）。behaviors 回调保留，
+        # 点击时携带 form_value + submit_intent 回流。
+        "form_action_type": "submit",
         "behaviors": [{"type": "callback", "value": {INTENT_KEY: submit_intent}}],
     })
     body_elements = [

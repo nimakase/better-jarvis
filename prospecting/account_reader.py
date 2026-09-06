@@ -10,8 +10,10 @@
 【只读】。写回(对账后落值)是 ③,不在这里。
 
 依赖前提:当前视图需含这些列(缺哪列会明确报出来让 Ned 去 Edit columns 加):
-  Account name / Account type / Priority / Number of Associated Deals /
+  Account name / Account type / Number of Associated Deals /
   Number of open deals / Last activity date / Last Engagement Date
+(Priority 2026-08-11 已从必填摘除——v2 不再用它判断,见 REQUIRED_FIELDS 注释;
+ decay stage 候选列同期删除,HubSpot 该 portal 原生没有此属性,永远不会匹配到)
 """
 from __future__ import annotations
 
@@ -30,14 +32,15 @@ COLUMN_CANDIDATES: Dict[str, List[str]] = {
     "num_won_deals": ["number of closed won deals", "closed won deals", "won deals"],  # v2:Core 分层 T0/T1
     "last_activity_date": ["last activity date", "last activity"],
     "last_engagement_date": ["last engagement date", "last engagement"],
-    "decay_stage": ["decay stage"],   # v2:死线钟(Prospecting 的公司 time-decay 阶段)
     "company_domain": ["company domain name", "domain name", "website url", "domain"],  # v2:Breeze 消歧
     "create_date": ["create date"],   # 可选:分批游标用
 }
 
-# classify + reconcile 真正需要的(缺了没法分级)
+# classify + reconcile 真正需要的(缺了没法分级)。
+# 2026-08-11:existing_priority 退休摘出——v2 的 run_view_cycle 全链路不读它
+# (只有 v1 的 reconcile() 会用,v2 不调用),留着当必填列只会逼着 Ned 白维护一列。
 REQUIRED_FIELDS = [
-    "existing_type", "existing_priority",
+    "existing_type",
     "num_associated_deals", "num_open_deals",
     "last_activity_date", "last_engagement_date",
 ]
@@ -126,7 +129,7 @@ def _row_complete(raw: Dict[str, str], cols: Dict[str, str]) -> bool:
 
 
 def _clean_text_cell(text: str) -> Optional[str]:
-    """字符串型单元格:空/-- → None,否则 strip 后返回(供 decay_stage / domain)。"""
+    """字符串型单元格:空/-- → None,否则 strip 后返回(供 domain)。"""
     t = (text or "").strip()
     return None if t in ("", "--") else t
 
@@ -141,7 +144,6 @@ def _parse_raw(raw: Dict[str, str]) -> dict:
         "num_won_deals": parse_int_cell(raw.get("num_won_deals", "")),   # v2
         "last_activity_date": raw.get("last_activity_date") or None,
         "last_engagement_date": raw.get("last_engagement_date") or None,
-        "decay_stage": _clean_text_cell(raw.get("decay_stage", "")),     # v2:原样透传
         "company_domain": _clean_text_cell(raw.get("company_domain", "")),  # v2:Breeze 消歧用
         "create_date": raw.get("create_date") or None,
     }
