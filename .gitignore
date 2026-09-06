@@ -46,6 +46,7 @@ Thumbs.db
 chrome_profile/
 
 # 运行时产物：日志滚动文件、临时导出结果、待清理内容（不入库）
+logs/*.log
 logs/*.log.[0-9]*
 Claude outputs/
 _to_delete/
